@@ -2,6 +2,7 @@ package mapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,11 +12,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
-	GmailAPIBase = "https://www.googleapis.com/gmail/v1/users/me"
-	MaxFileSize  = 25 * 1024 * 1024 // 25MB Gmail limit
+	GmailAPIBase       = "https://www.googleapis.com/gmail/v1/users/me"
+	MaxFileSize        = 25 * 1024 * 1024 // 25MB Gmail limit
+	GmailHTTPTimeout   = 30 * time.Second
+	maxAPIResponseSize = 1024 * 1024
 )
 
 // GmailClient handles Gmail API operations
@@ -41,10 +45,58 @@ func NewGmailClientWithBase(token, baseURL string) *GmailClient {
 		baseURL = GmailAPIBase
 	}
 	return &GmailClient{
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: GmailHTTPTimeout},
 		token:      token,
 		baseURL:    baseURL,
 	}
+}
+
+// SendAs represents a Gmail sender identity returned by users.settings.sendAs.list.
+// Callers decide which identities are usable; custom aliases are not ready until
+// Gmail reports verificationStatus "accepted".
+type SendAs struct {
+	SendAsEmail        string `json:"sendAsEmail"`
+	DisplayName        string `json:"displayName"`
+	ReplyToAddress     string `json:"replyToAddress"`
+	Signature          string `json:"signature"`
+	IsPrimary          bool   `json:"isPrimary"`
+	IsDefault          bool   `json:"isDefault"`
+	VerificationStatus string `json:"verificationStatus"`
+}
+
+type sendAsListResponse struct {
+	SendAs []SendAs `json:"sendAs"`
+}
+
+// ListSendAs returns the authenticated account's primary address and custom
+// sender aliases. The caller must filter unverified custom aliases before use.
+func (gc *GmailClient) ListSendAs(ctx context.Context) ([]SendAs, error) {
+	url := fmt.Sprintf("%s/settings/sendAs", gc.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create send-as request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+gc.token)
+
+	resp, err := gc.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list send-as aliases: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("token expired")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+		return nil, fmt.Errorf("Gmail API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result sendAsListResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse send-as response: %w", err)
+	}
+	return result.SendAs, nil
 }
 
 // DraftResponse represents a Gmail API draft creation response

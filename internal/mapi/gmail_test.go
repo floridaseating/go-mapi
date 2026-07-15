@@ -1,7 +1,9 @@
 package mapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -175,5 +177,85 @@ func TestGmailClient_CreateDraft_RequestBodyShape(t *testing.T) {
 	// base64url should not contain padding, plus or slash characters.
 	if strings.ContainsAny(gotRaw, "+/=") {
 		t.Errorf("message.raw contains non-base64url characters: %q", gotRaw)
+	}
+}
+
+func TestGmailClient_ListSendAs(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodGet {
+			t.Errorf("request method = %q, want GET", r.Method)
+		}
+		if r.URL.Path != "/settings/sendAs" {
+			t.Errorf("request path = %q, want /settings/sendAs", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sender-token" {
+			t.Errorf("Authorization header = %q, want Bearer sender-token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"sendAs":[{"sendAsEmail":"user@floridaseating.com","displayName":"User Name","replyToAddress":"replies@floridaseating.com","signature":"<p>Signature</p>","isPrimary":true,"isDefault":true,"verificationStatus":"accepted"},{"sendAsEmail":"returns@floridaseating.com","displayName":"Returns","isPrimary":false,"isDefault":false,"verificationStatus":"pending"}]}`)
+	}))
+	defer srv.Close()
+
+	client := NewGmailClientWithBase("sender-token", srv.URL)
+	aliases, err := client.ListSendAs(context.Background())
+	if err != nil {
+		t.Fatalf("ListSendAs unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected server to be called")
+	}
+	if len(aliases) != 2 {
+		t.Fatalf("ListSendAs returned %d aliases, want 2", len(aliases))
+	}
+	if got := aliases[0]; got.SendAsEmail != "user@floridaseating.com" || got.DisplayName != "User Name" || got.ReplyToAddress != "replies@floridaseating.com" || got.Signature != "<p>Signature</p>" || !got.IsPrimary || !got.IsDefault || got.VerificationStatus != "accepted" {
+		t.Fatalf("primary alias decoded incorrectly: %+v", got)
+	}
+	if got := aliases[1]; got.SendAsEmail != "returns@floridaseating.com" || got.VerificationStatus != "pending" {
+		t.Fatalf("custom alias decoded incorrectly: %+v", got)
+	}
+}
+
+func TestGmailClient_ListSendAs_ContextCanceled(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"sendAs":[]}`)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := NewGmailClientWithBase("sender-token", srv.URL)
+	_, err := client.ListSendAs(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListSendAs error = %v, want context.Canceled", err)
+	}
+	if called {
+		t.Fatal("canceled request unexpectedly reached the server")
+	}
+}
+
+func TestGmailClient_ListSendAs_APIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error":{"message":"insufficient authentication scopes"}}`)
+	}))
+	defer srv.Close()
+
+	client := NewGmailClientWithBase("sender-token", srv.URL)
+	_, err := client.ListSendAs(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Gmail API error (403)") {
+		t.Fatalf("ListSendAs error = %v, want Gmail API error (403)", err)
+	}
+}
+
+func TestNewGmailClientWithBase_HasBoundedTimeout(t *testing.T) {
+	client := NewGmailClientWithBase("sender-token", "https://example.invalid")
+	if client.httpClient.Timeout != GmailHTTPTimeout {
+		t.Fatalf("http client timeout = %s, want %s", client.httpClient.Timeout, GmailHTTPTimeout)
 	}
 }
