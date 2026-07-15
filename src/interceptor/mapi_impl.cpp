@@ -27,33 +27,50 @@ uint64_t AttachmentBytes(const MailMessage& msg) {
 class SendCallTrace {
 public:
     SendCallTrace(const char* api,
-                  const std::string& originApp,
                   ULONG_PTR uiParent,
                   FLAGS flags,
-                  uint32_t attachmentCount)
-        : started_(std::chrono::steady_clock::now()) {
-        trace_.timestamp = DiagnosticTrace::UtcTimestampNow();
-        trace_.api = api;
-        trace_.originApp = originApp;
-        trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
-        trace_.flags = static_cast<uint32_t>(flags);
-        trace_.uiParent = static_cast<uint64_t>(uiParent);
-        trace_.attachmentCount = attachmentCount;
+                  uint32_t attachmentCount) noexcept {
+        try {
+            started_ = std::chrono::steady_clock::now();
+            trace_.timestamp = DiagnosticTrace::UtcTimestampNow();
+            trace_.api = api;
+            trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
+            trace_.flags = static_cast<uint32_t>(flags);
+            trace_.uiParent = static_cast<uint64_t>(uiParent);
+            trace_.attachmentCount = attachmentCount;
+        } catch (...) {
+            enabled_ = false;
+        }
     }
 
-    ULONG Finish(ULONG result, uint64_t attachmentBytes = 0) {
-        trace_.attachmentBytes = attachmentBytes;
-        trace_.result = static_cast<uint32_t>(result);
-        trace_.durationMs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - started_).count());
-        DiagnosticTrace::Append(trace_);
+    void SetOriginApp(const std::string& originApp) noexcept {
+        if (!enabled_) return;
+        try {
+            trace_.originApp = originApp;
+        } catch (...) {
+            enabled_ = false;
+        }
+    }
+
+    ULONG Finish(ULONG result, uint64_t attachmentBytes = 0) noexcept {
+        if (!enabled_) return result;
+        try {
+            trace_.attachmentBytes = attachmentBytes;
+            trace_.result = static_cast<uint32_t>(result);
+            trace_.durationMs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started_).count());
+            (void)DiagnosticTrace::Append(trace_);
+        } catch (...) {
+            // Diagnostics are observational only. Preserve the MAPI result.
+        }
         return result;
     }
 
 private:
     std::chrono::steady_clock::time_point started_;
     MapiCallTrace trace_;
+    bool enabled_ = true;
 };
 
 } // namespace
@@ -152,7 +169,7 @@ ULONG MapiImpl::MAPISendMailA(
     ULONG ulReserved
 ) {
     SendCallTrace trace(
-        "MAPISendMailA", GetOriginApplicationName(), ulUIParam, flFlags,
+        "MAPISendMailA", ulUIParam, flFlags,
         lpMessage ? lpMessage->nFileCount : 0);
     if (!lpMessage) {
         return trace.Finish(MAPI_E_INVALID_MESSAGE);
@@ -163,6 +180,7 @@ ULONG MapiImpl::MAPISendMailA(
         // originApp populated here because it requires live process context
         // (out of scope for the pure message_converter module).
         msg.originApp = GetOriginApplicationName();
+        trace.SetOriginApp(msg.originApp);
 
         // QUICK-260423-tk6: copy attachments into a queue-owned sibling dir
         // BEFORE writing the JSON. The legacy Spanish MAPI caller deletes its
@@ -194,7 +212,7 @@ ULONG MapiImpl::MAPISendMailW(
     ULONG ulReserved
 ) {
     SendCallTrace trace(
-        "MAPISendMailW", GetOriginApplicationName(), ulUIParam, flFlags,
+        "MAPISendMailW", ulUIParam, flFlags,
         lpMessage ? lpMessage->nFileCount : 0);
     if (!lpMessage) {
         return trace.Finish(MAPI_E_INVALID_MESSAGE);
@@ -205,6 +223,7 @@ ULONG MapiImpl::MAPISendMailW(
         // originApp populated here because it requires live process context
         // (out of scope for the pure message_converter module).
         msg.originApp = GetOriginApplicationName();
+        trace.SetOriginApp(msg.originApp);
 
         // QUICK-260423-tk6: same lifetime fix as the ANSI path — copy
         // attachments into %LOCALAPPDATA%\go-mapi\queue\<stem>\ before the

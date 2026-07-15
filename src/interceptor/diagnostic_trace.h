@@ -29,7 +29,7 @@ public:
     // Appends one JSONL record to a bounded local diagnostic file. Failures
     // are intentionally non-fatal: observing a MAPI call must never change
     // the result returned to the calling application.
-    static bool Append(const MapiCallTrace& trace);
+    static bool Append(const MapiCallTrace& trace) noexcept;
 
 private:
     static std::string EscapeJsonString(const std::string& value);

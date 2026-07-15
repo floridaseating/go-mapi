@@ -4,8 +4,13 @@
 #include "diagnostic_trace.h"
 
 #include <string>
+#include <utility>
 
 using namespace go_mapi;
+
+static_assert(
+    noexcept(DiagnosticTrace::Append(std::declval<const MapiCallTrace&>())),
+    "diagnostic recording must never throw across a MAPI call");
 
 TEST_CASE("diagnostic trace serializes the privacy-safe QuickBooks call envelope") {
     MapiCallTrace trace{};
