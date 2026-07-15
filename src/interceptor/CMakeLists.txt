@@ -48,6 +48,8 @@ endif()
 add_library(go-mapi SHARED
     main.cpp
     mapi_impl.cpp
+    diagnostic_trace.cpp
+    diagnostic_trace_windows.cpp
     json_writer.cpp
     fs_utils.cpp
     $<TARGET_OBJECTS:message_converter_obj>

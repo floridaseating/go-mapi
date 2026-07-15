@@ -69,3 +69,29 @@ endif()
 
 add_test(NAME fs_utils_tests
          COMMAND fs_utils_tests)
+
+add_executable(diagnostic_trace_tests
+    diagnostic_trace_tests.cpp
+    ../diagnostic_trace.cpp
+)
+
+target_include_directories(diagnostic_trace_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+set_target_properties(diagnostic_trace_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+if(MSVC)
+    target_compile_options(diagnostic_trace_tests PRIVATE /W4 /WX-)
+    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32.lib shell32.lib)
+elseif(MINGW)
+    target_compile_options(diagnostic_trace_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32 shell32 -static-libgcc -static-libstdc++)
+    target_link_options(diagnostic_trace_tests PRIVATE -static)
+endif()
+
+add_test(NAME diagnostic_trace_tests
+         COMMAND diagnostic_trace_tests)
