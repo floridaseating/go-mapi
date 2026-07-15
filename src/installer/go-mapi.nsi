@@ -77,7 +77,6 @@ Var AutoUpdateCheckboxState   ; nsDialogs handle for the FinishPage-adjacent che
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${__FILEDIR__}\..\..\LICENSE"
-!insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 ; Phase 11.1 D-07: AutoUpdate opt-in checkbox page. Default OFF. /AUTOUPDATE=1
 ; on the command line forces enable for silent installs (the page is skipped
@@ -150,11 +149,20 @@ FunctionEnd
 ;------------------------------------------------------------------------------
 
 Section "Install" SecInstall
+  ; The Simple MAPI registration below intentionally uses one shared
+  ; REG_EXPAND_SZ value (%ProgramFiles%\go-mapi\go-mapi.dll). Windows expands
+  ; %ProgramFiles% according to the caller's bitness, so both physical DLL
+  ; locations must remain fixed. Ignore an interactive or /D= override rather
+  ; than installing the x64 payload somewhere the shared registration cannot
+  ; resolve.
+  StrCpy $INSTDIR "$PROGRAMFILES64\go-mapi"
+
   ; QUICK-260423-ntu T2 — if a previous install's go-mapi.exe is running in
   ; $INSTDIR, give it a chance to close cleanly (WM_CLOSE via taskkill
   ; without /F triggers the intentionalQuit path in src/app/main.go) before
   ; we overwrite the binary. Silent mode auto-retries; interactive mode
-  ; prompts the user. MUST be the first statement in the section.
+  ; prompts the user. MUST be the first operational guard after the fixed
+  ; installation path is restored.
   Call EnsureAppNotRunning
 
   SetOutPath "$INSTDIR"

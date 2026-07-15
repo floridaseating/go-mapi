@@ -43,6 +43,7 @@ BeforeAll {
     # QUICK-260423-ntu T3d — dual-bitness install surfaces
     $script:InstallDir32 = "${env:ProgramFiles(x86)}\go-mapi"
     $script:MapiSubKey   = 'SOFTWARE\Clients\Mail\go-mapi'
+    $script:RejectedInstallDir = Join-Path $env:TEMP 'go-mapi-custom-install-path'
 
     # Phase 11.1 D-03 / D-18 case 4: %APPDATA% path is the negative-assertion target.
     # The %ProgramData% path is already $script:Shortcut (set by Phase 10).
@@ -79,6 +80,24 @@ BeforeAll {
         }
     }
 
+    function Get-MapiDllPathKind {
+        param([Microsoft.Win32.RegistryView]$View)
+
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            $View
+        )
+        $key = $null
+        try {
+            $key = $base.OpenSubKey($script:MapiSubKey)
+            if ($null -eq $key) { return $null }
+            return $key.GetValueKind('DLLPath')
+        } finally {
+            if ($null -ne $key) { $key.Dispose() }
+            $base.Dispose()
+        }
+    }
+
     function Get-MapiDllPathExpanded32 {
         # Run the expansion in a real 32-bit process. HKLM\SOFTWARE\Clients is
         # shared on Windows 7+, while %ProgramFiles% is architecture-specific.
@@ -108,11 +127,17 @@ Describe "go-mapi installer round-trip" {
 
     Context "Silent install" {
         # D-21 item 1
-        It "1. silent install exits 0 with /S /D=<InstallDir>" {
+        It "1. silent install ignores a custom /D path and exits 0" {
             # NSIS /D= must be the LAST argument and NOT quoted (per RESEARCH Pitfall 5).
-            # PowerShell's -ArgumentList array form preserves the token correctly.
-            $proc = Start-Process -FilePath $script:SetupExe -ArgumentList '/S',"/D=$($script:InstallDir)" -Wait -PassThru
+            # The bridge deliberately fixes its x64 and x86 paths because one shared
+            # expandable MAPI DLLPath must resolve correctly from both process types.
+            if (Test-Path $script:RejectedInstallDir) {
+                Remove-Item -LiteralPath $script:RejectedInstallDir -Recurse -Force
+            }
+            $proc = Start-Process -FilePath $script:SetupExe -ArgumentList '/S',"/D=$($script:RejectedInstallDir)" -Wait -PassThru
             $proc.ExitCode | Should -Be 0
+            Test-Path (Join-Path $script:InstallDir 'go-mapi.exe') | Should -BeTrue
+            Test-Path $script:RejectedInstallDir | Should -BeFalse
         }
 
         # D-21 item 2
@@ -126,6 +151,8 @@ Describe "go-mapi installer round-trip" {
             Test-Path $script:MapiKey | Should -BeTrue
             $raw = Get-MapiDllPathRaw -View Registry64
             $raw | Should -Be '%ProgramFiles%\go-mapi\go-mapi.dll'
+            Get-MapiDllPathKind -View Registry64 | Should -Be ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+            Get-MapiDllPathKind -View Registry32 | Should -Be ([Microsoft.Win32.RegistryValueKind]::ExpandString)
             [Environment]::ExpandEnvironmentVariables($raw) | Should -Be (Join-Path $env:ProgramFiles 'go-mapi\go-mapi.dll')
             # (Default) value read via Get-ItemProperty with '(default)' property name
             (Get-ItemProperty -Path $script:MapiKey -Name '(default)').'(default)' | Should -Be 'go-mapi'
@@ -210,20 +237,20 @@ Describe "go-mapi installer round-trip" {
             $x64Before = (Get-FileHash -Algorithm SHA256 -Path $x64Path).Hash
             $x86Before = (Get-FileHash -Algorithm SHA256 -Path $x86Path).Hash
 
-            # Touch both files to a known earlier mtime so a silent skip leaves them stale.
-            (Get-Item $x64Path).LastWriteTime = (Get-Date).AddDays(-1)
-            (Get-Item $x86Path).LastWriteTime = (Get-Date).AddDays(-1)
+            # Corrupt both installed copies. A skipped overwrite would leave these
+            # bytes in place; a real reinstall restores the packaged DLLs exactly.
+            [IO.File]::AppendAllText($x64Path, 'go-mapi-reinstall-probe')
+            [IO.File]::AppendAllText($x86Path, 'go-mapi-reinstall-probe')
+            (Get-FileHash -Algorithm SHA256 -Path $x64Path).Hash | Should -Not -Be $x64Before
+            (Get-FileHash -Algorithm SHA256 -Path $x86Path).Hash | Should -Not -Be $x86Before
 
             # Reinstall silently WITHOUT prior uninstall — this is the T4 repro case.
             $proc = Start-Process -FilePath $script:SetupExe -ArgumentList '/S',"/D=$($script:InstallDir)" -Wait -PassThru
             $proc.ExitCode | Should -Be 0
 
-            # Both DLLs MUST have a fresh mtime (overwrite happened).
-            (Get-Item $x64Path).LastWriteTime | Should -BeGreaterThan (Get-Date).AddMinutes(-2)
-            (Get-Item $x86Path).LastWriteTime | Should -BeGreaterThan (Get-Date).AddMinutes(-2)
-
-            # Hashes should match the prior install (same binaries shipped — confirms the
-            # overwrite happened with a real File write rather than NSIS skipping).
+            # Hashes must match the pristine prior install. This proves the installer
+            # replaced the deliberately corrupted files and avoids relying on NSIS's
+            # source-preserving LastWriteTime behavior.
             (Get-FileHash -Algorithm SHA256 -Path $x64Path).Hash | Should -Be $x64Before
             (Get-FileHash -Algorithm SHA256 -Path $x86Path).Hash | Should -Be $x86Before
 
