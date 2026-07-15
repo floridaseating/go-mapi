@@ -18,11 +18,12 @@
 # checking the symbol that is actually called catches stale-definition scenarios
 # that checking `Reader` would miss.
 if (-not ('GoMapi.AumidReader.PublicReader' -as [type])) {
-    Add-Type -Namespace GoMapi.AumidReader -Name Reader -MemberDefinition @'
+    Add-Type -TypeDefinition @'
         using System;
         using System.Runtime.InteropServices;
         using System.Text;
 
+        namespace GoMapi.AumidReader {
         [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         internal interface IPropertyStore {
             void GetCount(out uint count);
@@ -100,6 +101,7 @@ if (-not ('GoMapi.AumidReader.PublicReader' -as [type])) {
                     Marshal.ReleaseComObject(obj);
                 }
             }
+        }
         }
 '@
 }
