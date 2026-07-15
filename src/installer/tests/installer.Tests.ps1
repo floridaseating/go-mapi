@@ -290,6 +290,13 @@ Describe "go-mapi installer round-trip" {
         # D-21 item 7
         It "7. silent uninstall exits 0 with /S" {
             $uninst = Join-Path $script:InstallDir 'uninstall.exe'
+            # Prior install-context cases intentionally exercise full uninstall.
+            # Re-establish this test's own precondition instead of depending on
+            # Pester case ordering or state left by item 24b.
+            if (-not (Test-Path $uninst)) {
+                $install = Start-Process -FilePath $script:SetupExe -ArgumentList '/S',"/D=$($script:InstallDir)" -Wait -PassThru
+                $install.ExitCode | Should -Be 0
+            }
             Test-Path $uninst | Should -BeTrue -Because "uninstaller must be in place after install"
             $proc = Start-Process -FilePath $uninst -ArgumentList '/S' -Wait -PassThru
             $proc.ExitCode | Should -Be 0
@@ -323,12 +330,11 @@ Describe "go-mapi installer round-trip" {
         }
 
         # D-21 item 12 — Credential Manager scrub (colon target per PATTERNS.md Shared Pattern 3)
-        It "12. cmdkey /list:go-mapi:oauth-tokens returns no matching entries" {
-            # cmdkey prints to stdout + may use stderr depending on locale; merge streams.
-            $out = & cmdkey /list:$script:CredTarget 2>&1 | Out-String
-            # cmdkey output contains 'Target:' lines when an entry matches, or a
-            # "NONE" / locale-dependent "no credentials" message when nothing matches.
-            # Safe assertion: no line containing the literal target string.
+        It "12. Credential Manager contains no go-mapi OAuth token entry" {
+            # Query the full store. Targeted `/list:<target>` output echoes the
+            # requested target even when it reports `* NONE *`, which creates a
+            # false positive for a literal absence assertion.
+            $out = & cmdkey /list 2>&1 | Out-String
             $out | Should -Not -Match ([regex]::Escape($script:CredTarget)) -Because "cmdkey should find no credentials under target '$($script:CredTarget)' after uninstall"
         }
 
