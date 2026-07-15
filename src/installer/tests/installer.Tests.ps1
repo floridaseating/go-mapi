@@ -42,7 +42,7 @@ BeforeAll {
     $script:CredTarget   = 'go-mapi:oauth-tokens'
     # QUICK-260423-ntu T3d — dual-bitness install surfaces
     $script:InstallDir32 = "${env:ProgramFiles(x86)}\go-mapi"
-    $script:MapiKey32    = 'HKLM:\SOFTWARE\WOW6432Node\Clients\Mail\go-mapi'
+    $script:MapiSubKey   = 'SOFTWARE\Clients\Mail\go-mapi'
 
     # Phase 11.1 D-03 / D-18 case 4: %APPDATA% path is the negative-assertion target.
     # The %ProgramData% path is already $script:Shortcut (set by Phase 10).
@@ -56,6 +56,52 @@ BeforeAll {
     Write-Host ("[Setup] InstallDir  = {0}" -f $script:InstallDir)
     Write-Host ("[Setup] ProgramData = {0}" -f $script:ProgramData)
     Write-Host ("[Setup] CredTarget  = {0}" -f $script:CredTarget)
+
+    function Get-MapiDllPathRaw {
+        param([Microsoft.Win32.RegistryView]$View)
+
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            $View
+        )
+        $key = $null
+        try {
+            $key = $base.OpenSubKey($script:MapiSubKey)
+            if ($null -eq $key) { return $null }
+            return $key.GetValue(
+                'DLLPath',
+                $null,
+                [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+            )
+        } finally {
+            if ($null -ne $key) { $key.Dispose() }
+            $base.Dispose()
+        }
+    }
+
+    function Get-MapiDllPathExpanded32 {
+        # Run the expansion in a real 32-bit process. HKLM\SOFTWARE\Clients is
+        # shared on Windows 7+, while %ProgramFiles% is architecture-specific.
+        $source = @'
+$base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry32)
+$key = $base.OpenSubKey('SOFTWARE\Clients\Mail\go-mapi')
+try {
+    if ($null -eq $key) { exit 0 }
+    $raw = $key.GetValue('DLLPath', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($null -ne $raw) { [Environment]::ExpandEnvironmentVariables($raw) }
+} finally {
+    if ($null -ne $key) { $key.Dispose() }
+    $base.Dispose()
+}
+'@
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source))
+        $ps32 = Join-Path $env:WINDIR 'SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+        $output = & $ps32 -NoProfile -EncodedCommand $encoded
+        if ($LASTEXITCODE -ne 0) {
+            throw "32-bit registry expansion probe failed with exit code $LASTEXITCODE"
+        }
+        return ($output | Out-String).Trim()
+    }
 }
 
 Describe "go-mapi installer round-trip" {
@@ -78,8 +124,9 @@ Describe "go-mapi installer round-trip" {
         # D-21 item 3
         It "3. HKLM MAPI handler key is registered with DLLPath" {
             Test-Path $script:MapiKey | Should -BeTrue
-            $props = Get-ItemProperty -Path $script:MapiKey
-            $props.DLLPath | Should -Match 'go-mapi\.dll$'
+            $raw = Get-MapiDllPathRaw -View Registry64
+            $raw | Should -Be '%ProgramFiles%\go-mapi\go-mapi.dll'
+            [Environment]::ExpandEnvironmentVariables($raw) | Should -Be (Join-Path $env:ProgramFiles 'go-mapi\go-mapi.dll')
             # (Default) value read via Get-ItemProperty with '(default)' property name
             (Get-ItemProperty -Path $script:MapiKey -Name '(default)').'(default)' | Should -Be 'go-mapi'
         }
@@ -90,8 +137,11 @@ Describe "go-mapi installer round-trip" {
             $json = Get-Content $script:BackupJson -Raw | ConvertFrom-Json
             $json.PSObject.Properties.Name | Should -Contain 'previousClient'
             $json.PSObject.Properties.Name | Should -Contain 'backedUpAt'
-            # backedUpAt should look like an ISO-8601 timestamp
-            $json.backedUpAt | Should -Match '^\d{4}-\d{2}-\d{2}T'
+            # PowerShell 7 deserializes ISO-8601 JSON strings into DateTime
+            # values, so validate the typed timestamp instead of regex-matching
+            # an implementation-dependent display conversion.
+            $timestamp = [DateTimeOffset]$json.backedUpAt
+            $timestamp.Year | Should -BeGreaterThan 2000
         }
 
         # D-21 item 5 — AUMID stamped on shortcut
@@ -145,13 +195,10 @@ Describe "go-mapi installer round-trip" {
             Get-PeMagic (Join-Path $script:InstallDir32 'go-mapi.dll') | Should -Be 0x10B
         }
 
-        # QUICK-260423-ntu item 18 — WOW6432Node DLLPath points at the x86 DLL
-        It "18. HKLM WOW6432Node MAPI key is registered with 32-bit DLLPath" {
-            # Path-based read: HKLM:\SOFTWARE\WOW6432Node\... resolves directly
-            # without SetRegView, so Get-ItemProperty hits the 32-bit hive.
-            Test-Path $script:MapiKey32 | Should -BeTrue
-            $props = Get-ItemProperty -Path $script:MapiKey32
-            $props.DLLPath | Should -Match '(?i)Program Files \(x86\)\\go-mapi\\go-mapi\.dll$'
+        # QUICK-260423-ntu item 18 — a real x86 process resolves the shared
+        # expandable DLLPath to the x86 installation.
+        It "18. 32-bit MAPI resolves DLLPath to the x86 DLL" {
+            Get-MapiDllPathExpanded32 | Should -Be (Join-Path ${env:ProgramFiles(x86)} 'go-mapi\go-mapi.dll')
         }
 
         # Phase 11.1 D-05 / D-18 case 3 — silent reinstall overwrites both DLLs (T4 regression)
@@ -180,9 +227,12 @@ Describe "go-mapi installer round-trip" {
             (Get-FileHash -Algorithm SHA256 -Path $x64Path).Hash | Should -Be $x64Before
             (Get-FileHash -Algorithm SHA256 -Path $x86Path).Hash | Should -Be $x86Before
 
-            # Registry DLLPath values must still point to the right bitness in both views.
-            (Get-ItemProperty -Path $script:MapiKey).DLLPath   | Should -Match '(?i)Program Files\\go-mapi\\go-mapi\.dll$'
-            (Get-ItemProperty -Path $script:MapiKey32).DLLPath | Should -Match '(?i)Program Files \(x86\)\\go-mapi\\go-mapi\.dll$'
+            # The shared expandable value must still resolve correctly in both
+            # a native and a real 32-bit process after reinstall.
+            $raw = Get-MapiDllPathRaw -View Registry64
+            $raw | Should -Be '%ProgramFiles%\go-mapi\go-mapi.dll'
+            [Environment]::ExpandEnvironmentVariables($raw) | Should -Be $x64Path
+            Get-MapiDllPathExpanded32 | Should -Be $x86Path
         }
 
         # Phase 11.1 D-03 / D-18 case 4 — Start Menu shortcut location regression
@@ -293,10 +343,8 @@ Describe "go-mapi installer round-trip" {
             # Prior install-context cases intentionally exercise full uninstall.
             # Re-establish this test's own precondition instead of depending on
             # Pester case ordering or state left by item 24b.
-            if (-not (Test-Path $uninst)) {
-                $install = Start-Process -FilePath $script:SetupExe -ArgumentList '/S',"/D=$($script:InstallDir)" -Wait -PassThru
-                $install.ExitCode | Should -Be 0
-            }
+            $install = Start-Process -FilePath $script:SetupExe -ArgumentList '/S',"/D=$($script:InstallDir)" -Wait -PassThru
+            $install.ExitCode | Should -Be 0
             Test-Path $uninst | Should -BeTrue -Because "uninstaller must be in place after install"
             $proc = Start-Process -FilePath $uninst -ArgumentList '/S' -Wait -PassThru
             $proc.ExitCode | Should -Be 0
@@ -371,9 +419,10 @@ Describe "go-mapi installer round-trip" {
             Test-Path (Join-Path $script:InstallDir32 'go-mapi.dll') | Should -BeFalse
         }
 
-        # QUICK-260423-ntu item 20 — WOW6432Node MAPI key removed
-        It "20. HKLM WOW6432Node MAPI handler key is gone after uninstall" {
-            Test-Path $script:MapiKey32 | Should -BeFalse
+        # QUICK-260423-ntu item 20 — x86 MAPI can no longer resolve the shared
+        # handler after uninstall.
+        It "20. 32-bit MAPI handler registration is gone after uninstall" {
+            Get-MapiDllPathExpanded32 | Should -BeNullOrEmpty
         }
     }
 }
