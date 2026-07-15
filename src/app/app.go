@@ -538,7 +538,7 @@ func (a *App) CreateDraftForID(id string) error {
 
 	callErr := a.MakeAuthenticatedGmailCall(ctx, func(token string) (int, error) {
 		gc := mapi.NewGmailClientWithBase(token, gmailBaseURLOverride)
-		_, err := gc.CreateDraft(target.Message)
+		_, err := gc.CreateDraft(ctx, target.Message)
 		if err != nil {
 			if err.Error() == "token expired" {
 				return 401, err
