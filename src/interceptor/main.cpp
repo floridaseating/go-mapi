@@ -1,7 +1,6 @@
 #include <windows.h>
 #include "mapi_impl.h"
 #include "mapi_types.h"
-#include "fs_utils.h"
 
 // Forward exports - these will be called through the .def file
 extern "C" {
@@ -62,20 +61,8 @@ ULONG STDAPICALLTYPE MAPISendDocuments(
 
 }  // extern "C"
 
-// DLL Entry Point
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH:
-        // Initialize on DLL load
-        go_mapi::FsUtils::EnsureOutputDirectory();
-        break;
-    case DLL_PROCESS_DETACH:
-        // Cleanup on DLL unload
-        break;
-    case DLL_THREAD_ATTACH:
-    case DLL_THREAD_DETACH:
-        // Thread-specific initialization/cleanup
-        break;
-    }
+// DllMain runs under the Windows loader lock. Keep it inert; all filesystem
+// and runtime initialization is performed lazily by exported MAPI calls.
+BOOL APIENTRY DllMain(HMODULE, DWORD, LPVOID) {
     return TRUE;
 }

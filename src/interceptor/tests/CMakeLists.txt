@@ -95,3 +95,13 @@ endif()
 
 add_test(NAME diagnostic_trace_tests
          COMMAND diagnostic_trace_tests)
+
+# DllMain runs under the Windows loader lock. Keep its implementation exactly
+# inert so loading the provider cannot touch Shell APIs, files, or C++ runtime
+# facilities before a caller enters an exported MAPI function.
+add_test(
+    NAME dllmain_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_dllmain_contract.cmake
+)
