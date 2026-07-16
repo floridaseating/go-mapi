@@ -1,13 +1,62 @@
 #include "test_utils.h"
+#include <shlobj.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
 #include <regex>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 
 namespace mapi_test {
+
+namespace {
+
+const char* kHarnessOrigin = "\"originApp\":\"go-mapi-test-harness.exe\"";
+
+bool IsHarnessJson(const fs::path& path) {
+    if (!fs::is_regular_file(path) || path.extension() != ".json") {
+        return false;
+    }
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str().find(kHarnessOrigin) != std::string::npos;
+}
+
+fs::path HarnessFixtureDir() {
+    wchar_t tempPath[MAX_PATH];
+    DWORD length = GetTempPathW(MAX_PATH, tempPath);
+    if (length == 0 || length >= MAX_PATH) return {};
+    return fs::path(tempPath) /
+        (L"go-mapi-test-harness-" + std::to_wstring(GetCurrentProcessId()));
+}
+
+template <typename String>
+String CreateFixture(const fs::path& relativePath) {
+    try {
+        fs::path fixtureDir = HarnessFixtureDir();
+        if (fixtureDir.empty()) return {};
+        fs::path fullPath = fixtureDir / relativePath;
+        fs::create_directories(fullPath.parent_path());
+        std::ofstream file(fullPath, std::ios::binary | std::ios::trunc);
+        if (!file) return {};
+        file << "go-mapi test attachment\n";
+        file.close();
+        if (!file) return {};
+        if constexpr (std::is_same_v<String, std::wstring>) {
+            return fullPath.wstring();
+        } else {
+            return fullPath.string();
+        }
+    } catch (...) {
+        return {};
+    }
+}
+
+} // namespace
 
 MAPISendMailFunc TestUtilities::LoadMAPISendMail(const std::string& dllPath) {
     HMODULE hDll = LoadLibraryA(dllPath.c_str());
@@ -32,7 +81,7 @@ MAPISendMailFunc TestUtilities::LoadMAPISendMail(const std::string& dllPath) {
 bool TestUtilities::VerifyJsonFileCreated(const std::string& tempDir) {
     try {
         for (const auto& entry : fs::directory_iterator(tempDir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            if (IsHarnessJson(entry.path())) {
                 std::cout << "Found JSON file: " << entry.path().filename().string() << std::endl;
                 return true;
             }
@@ -91,11 +140,20 @@ bool TestUtilities::ValidateJsonFile(const std::string& filePath) {
 
 void TestUtilities::CleanupTestFiles(const std::string& tempDir) {
     try {
+        if (!fs::exists(tempDir)) return;
+        std::vector<fs::path> harnessJsonFiles;
         for (const auto& entry : fs::directory_iterator(tempDir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                fs::remove(entry);
-                std::cout << "Deleted: " << entry.path().filename().string() << std::endl;
+            if (IsHarnessJson(entry.path())) {
+                harnessJsonFiles.push_back(entry.path());
             }
+        }
+        for (const auto& jsonPath : harnessJsonFiles) {
+            fs::path attachmentDir = jsonPath.parent_path() / jsonPath.stem();
+            fs::remove(jsonPath);
+            if (fs::is_directory(attachmentDir)) {
+                fs::remove_all(attachmentDir);
+            }
+            std::cout << "Deleted: " << jsonPath.filename().string() << std::endl;
         }
     } catch (const std::exception& e) {
         std::cerr << "Error cleaning up files: " << e.what() << std::endl;
@@ -103,20 +161,31 @@ void TestUtilities::CleanupTestFiles(const std::string& tempDir) {
 }
 
 std::string TestUtilities::GetGoMapiTempDir() {
-    wchar_t tempPath[MAX_PATH];
-    if (GetTempPathW(MAX_PATH, tempPath) == 0) {
+    char localAppData[MAX_PATH];
+    if (FAILED(SHGetFolderPathA(
+            nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT,
+            localAppData))) {
         return "";
     }
+    return (fs::path(localAppData) / "go-mapi" / "queue").string();
+}
 
-    std::string result;
-    // Convert wide string to narrow string
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, tempPath, -1, NULL, 0, NULL, NULL);
-    result.resize(size_needed - 1);
-    WideCharToMultiByte(CP_UTF8, 0, tempPath, -1, &result[0], size_needed, NULL, NULL);
+std::string TestUtilities::CreateAttachmentFixture(
+    const std::string& relativePath) {
+    return CreateFixture<std::string>(fs::path(relativePath));
+}
 
-    // Append go-mapi directory
-    result = fs::path(result).append("go-mapi").string();
-    return result;
+std::wstring TestUtilities::CreateWideAttachmentFixture(
+    const std::wstring& relativePath) {
+    return CreateFixture<std::wstring>(fs::path(relativePath));
+}
+
+void TestUtilities::CleanupAttachmentFixtures() {
+    try {
+        fs::path fixtureDir = HarnessFixtureDir();
+        if (!fixtureDir.empty()) fs::remove_all(fixtureDir);
+    } catch (...) {
+    }
 }
 
 void TestUtilities::PrintTestResult(const std::string& testName, bool passed) {
@@ -131,7 +200,7 @@ int TestUtilities::GetJsonFileCount(const std::string& tempDir) {
     int count = 0;
     try {
         for (const auto& entry : fs::directory_iterator(tempDir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            if (IsHarnessJson(entry.path())) {
                 count++;
             }
         }
@@ -147,7 +216,7 @@ std::string TestUtilities::ReadNewestJsonContent(const std::string& tempDir) {
 
     try {
         for (const auto& entry : fs::directory_iterator(tempDir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            if (IsHarnessJson(entry.path())) {
                 auto wt = entry.last_write_time();
                 if (newestPath.empty() || wt > newestTime) {
                     newestTime = wt;

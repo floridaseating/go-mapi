@@ -59,12 +59,18 @@ int test_unicode_wide() {
     recipients[1].lpszName = ccName;
     recipients[1].lpszAddress = ccAddress;
 
-    // Test attachment with unicode path
-    wchar_t attachPath[] = L"C:\\Users\\ren\u00e9\\Documents\\informe_2026.pdf";
+    // Test a real attachment under a Unicode path.
+    std::wstring attachPath = TestUtilities::CreateWideAttachmentFixture(
+        L"ren\u00e9\\informe_2026.pdf");
+    if (attachPath.empty()) {
+        std::cerr << "Failed to create wide attachment fixture" << std::endl;
+        FreeLibrary(hDll);
+        return 1;
+    }
     wchar_t attachName[] = L"informe_2026.pdf";
 
     MapiFileDescW attachment = {};
-    attachment.lpszPathName = attachPath;
+    attachment.lpszPathName = attachPath.data();
     attachment.lpszFileName = attachName;
 
     MapiMessageW message = {};
