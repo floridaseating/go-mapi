@@ -4,17 +4,13 @@
 #include "fs_utils.h"
 #include "json_writer.h"
 #include <windows.h>
-#include <objbase.h>
 #include <psapi.h>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
-#include <limits>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "psapi.lib")
-#pragma comment(lib, "ole32.lib")
 
 namespace go_mapi {
 
@@ -274,7 +270,9 @@ ULONG MapiImpl::MAPILogoff(
 }
 
 ULONG MapiImpl::MAPIFreeBuffer(LPVOID pv) {
-    CoTaskMemFree(pv);
+    // Supported calls do not yet return provider-owned buffers. ResolveName
+    // remains fail-safe until ownership is proven through Windows MAPI32.
+    (void)pv;
     return SUCCESS_SUCCESS;
 }
 
@@ -365,95 +363,10 @@ ULONG MapiImpl::MAPIResolveName(
     ULONG ulReserved,
     LPMapiRecipDesc* lppRecip
 ) {
-    if (!lppRecip) {
-        return MAPI_E_FAILURE;
+    if (lppRecip) {
+        *lppRecip = nullptr;
     }
-    *lppRecip = nullptr;
-    if (ulReserved != 0) {
-        return MAPI_E_FAILURE;
-    }
-    if (!lpszName || lpszName[0] == '\0') {
-        return MAPI_E_UNKNOWN_RECIPIENT;
-    }
-
-    const size_t inputLength = std::strlen(lpszName);
-    const bool hasSmtpPrefix = inputLength >= 5 &&
-        (lpszName[0] == 'S' || lpszName[0] == 's') &&
-        (lpszName[1] == 'M' || lpszName[1] == 'm') &&
-        (lpszName[2] == 'T' || lpszName[2] == 't') &&
-        (lpszName[3] == 'P' || lpszName[3] == 'p') &&
-        lpszName[4] == ':';
-    const char* displayName = hasSmtpPrefix ? lpszName + 5 : lpszName;
-    const size_t displayLength = hasSmtpPrefix ? inputLength - 5 : inputLength;
-    if (displayLength < 3) {
-        return MAPI_E_UNKNOWN_RECIPIENT;
-    }
-
-    size_t atIndex = displayLength;
-    for (size_t index = 0; index < displayLength; ++index) {
-        const unsigned char character =
-            static_cast<unsigned char>(displayName[index]);
-        if (character <= 0x20 || character == 0x7f) {
-            return MAPI_E_UNKNOWN_RECIPIENT;
-        }
-        if (character == '@') {
-            if (atIndex != displayLength) {
-                return MAPI_E_UNKNOWN_RECIPIENT;
-            }
-            atIndex = index;
-        }
-    }
-    if (atIndex == 0 || atIndex >= displayLength - 1) {
-        return MAPI_E_UNKNOWN_RECIPIENT;
-    }
-
-    const size_t maxSize = std::numeric_limits<size_t>::max();
-    if (!hasSmtpPrefix && inputLength > maxSize - 5) {
-        return MAPI_E_INSUFFICIENT_MEMORY;
-    }
-    const size_t addressLength = hasSmtpPrefix
-        ? inputLength
-        : inputLength + 5;
-    size_t allocationSize = sizeof(MapiRecipDesc);
-    const auto addAllocationBytes = [&allocationSize, maxSize](size_t amount) {
-        if (amount > maxSize - allocationSize) {
-            return false;
-        }
-        allocationSize += amount;
-        return true;
-    };
-    if (!addAllocationBytes(displayLength) ||
-        !addAllocationBytes(1) ||
-        !addAllocationBytes(addressLength) ||
-        !addAllocationBytes(1)) {
-        return MAPI_E_INSUFFICIENT_MEMORY;
-    }
-
-    auto* descriptor = static_cast<LPMapiRecipDesc>(
-        CoTaskMemAlloc(allocationSize));
-    if (!descriptor) {
-        return MAPI_E_INSUFFICIENT_MEMORY;
-    }
-    std::memset(descriptor, 0, allocationSize);
-
-    char* cursor = reinterpret_cast<char*>(descriptor) + sizeof(*descriptor);
-    descriptor->lpszName = cursor;
-    std::memcpy(cursor, displayName, displayLength);
-    cursor[displayLength] = '\0';
-    cursor += displayLength + 1;
-
-    descriptor->lpszAddress = cursor;
-    if (hasSmtpPrefix) {
-        std::memcpy(cursor, lpszName, inputLength);
-    } else {
-        std::memcpy(cursor, "SMTP:", 5);
-        std::memcpy(cursor + 5, lpszName, inputLength);
-    }
-    cursor[addressLength] = '\0';
-
-    descriptor->ulRecipClass = MAPI_TO;
-    *lppRecip = descriptor;
-    return SUCCESS_SUCCESS;
+    return MAPI_E_NOT_SUPPORTED;
 }
 
 ULONG MapiImpl::MAPISendDocuments(

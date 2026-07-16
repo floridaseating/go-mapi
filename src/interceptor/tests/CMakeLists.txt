@@ -136,35 +136,3 @@ add_dependencies(mapi_export_contract_tests go-mapi)
 
 add_test(NAME mapi_export_contract_tests
          COMMAND mapi_export_contract_tests $<TARGET_FILE:go-mapi>)
-
-add_test(
-    NAME resolve_name_source_contract
-    COMMAND ${CMAKE_COMMAND}
-        -DIMPL_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_impl.cpp
-        -DTYPES_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_types.h
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_resolve_name_contract.cmake
-)
-
-add_executable(mapi32_stub_probe
-    mapi32_stub_probe.cpp
-)
-
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(mapi32_probe_output_name "go-mapi-mapi32-probe-x64")
-else()
-    set(mapi32_probe_output_name "go-mapi-mapi32-probe-x86")
-endif()
-
-set_target_properties(mapi32_stub_probe PROPERTIES
-    OUTPUT_NAME "${mapi32_probe_output_name}"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-if(MSVC)
-    target_compile_options(mapi32_stub_probe PRIVATE /W4 /WX-)
-    target_link_libraries(mapi32_stub_probe PRIVATE kernel32.lib)
-elseif(MINGW)
-    target_compile_options(mapi32_stub_probe PRIVATE -Wall -Wextra)
-    target_link_libraries(mapi32_stub_probe PRIVATE kernel32 -static-libgcc -static-libstdc++)
-    target_link_options(mapi32_stub_probe PRIVATE -static)
-endif()

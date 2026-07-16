@@ -48,13 +48,6 @@ if(NOT not_supported_match)
     message(FATAL_ERROR "MAPI_E_NOT_SUPPORTED must match the SDK value 26")
 endif()
 
-string(REGEX MATCH
-    "#[ \t]*define[ \t]+MAPI_E_UNKNOWN_RECIPIENT[ \t]+14([^0-9]|$)"
-    unknown_recipient_match "${types_text}")
-if(NOT unknown_recipient_match)
-    message(FATAL_ERROR "MAPI_E_UNKNOWN_RECIPIENT must match the SDK value 14")
-endif()
-
 # Some Windows SDKs provide LPULONG while the MinGW headers used for x86 CI do
 # not. The provider must use the ABI-equivalent ULONG* spelling so its own
 # declarations compile independently; the compiled SDK contract test still
