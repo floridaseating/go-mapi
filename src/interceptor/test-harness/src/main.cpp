@@ -39,6 +39,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Monitoring: " << tempDir << std::endl;
     std::cout << std::endl;
 
+    TestUtilities::CleanupAttachmentFixtures();
+
     // Run tests
     int testsPassed = 0;
     int testsFailed = 0;
@@ -54,6 +56,7 @@ int main(int argc, char* argv[]) {
     };
 
     for (const auto& test : tests) {
+        TestUtilities::CleanupTestFiles(tempDir);
         int result = test.second();
         if (result == 0) {
             testsPassed++;
@@ -62,7 +65,10 @@ int main(int argc, char* argv[]) {
             testsFailed++;
             TestUtilities::PrintTestResult(test.first, false);
         }
+        TestUtilities::CleanupTestFiles(tempDir);
     }
+
+    TestUtilities::CleanupAttachmentFixtures();
 
     std::cout << std::endl;
     std::cout << "=================================" << std::endl;

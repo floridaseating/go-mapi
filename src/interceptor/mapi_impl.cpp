@@ -252,10 +252,10 @@ ULONG MapiImpl::MAPILogon(
     ULONG ulReserved,
     LPLHANDLE lphSession
 ) {
-    // Stub: just return success
-    if (lphSession) {
-        *lphSession = 1;  // Return a dummy session handle
+    if (!lphSession) {
+        return MAPI_E_FAILURE;
     }
+    *lphSession = 1;
     return SUCCESS_SUCCESS;
 }
 
@@ -270,8 +270,103 @@ ULONG MapiImpl::MAPILogoff(
 }
 
 ULONG MapiImpl::MAPIFreeBuffer(LPVOID pv) {
-    // Stub: nothing to free in our implementation
+    // Supported calls do not yet return provider-owned buffers. ResolveName
+    // remains fail-safe until ownership is proven through Windows MAPI32.
+    (void)pv;
     return SUCCESS_SUCCESS;
+}
+
+ULONG MapiImpl::MAPIFindNext(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszMessageType,
+    LPSTR lpszSeedMessageID,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPSTR lpszMessageID
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIReadMail(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszMessageID,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPMapiMessage* lppMessage
+) {
+    if (lppMessage) {
+        *lppMessage = nullptr;
+    }
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPISaveMail(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPMapiMessage lpMessage,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPSTR lpszMessageID
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIDeleteMail(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszMessageID,
+    FLAGS flFlags,
+    ULONG ulReserved
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIAddress(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszCaption,
+    ULONG nEditFields,
+    LPSTR lpszLabels,
+    ULONG nRecips,
+    LPMapiRecipDesc lpRecips,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    ULONG* lpnNewRecips,
+    LPMapiRecipDesc* lppNewRecips
+) {
+    if (lpnNewRecips) {
+        *lpnNewRecips = 0;
+    }
+    if (lppNewRecips) {
+        *lppNewRecips = nullptr;
+    }
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIDetails(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPMapiRecipDesc lpRecip,
+    FLAGS flFlags,
+    ULONG ulReserved
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIResolveName(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszName,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPMapiRecipDesc* lppRecip
+) {
+    if (lppRecip) {
+        *lppRecip = nullptr;
+    }
+    return MAPI_E_NOT_SUPPORTED;
 }
 
 ULONG MapiImpl::MAPISendDocuments(
@@ -281,8 +376,8 @@ ULONG MapiImpl::MAPISendDocuments(
     LPSTR lpszFileNames,
     ULONG ulReserved
 ) {
-    // Stub: not implemented yet
-    return SUCCESS_SUCCESS;
+    // Do not report success while silently discarding requested documents.
+    return MAPI_E_NOT_SUPPORTED;
 }
 
 } // namespace go_mapi
