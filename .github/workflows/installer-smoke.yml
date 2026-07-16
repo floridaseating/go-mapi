@@ -92,8 +92,20 @@ jobs:
       - name: Build frontend (Svelte 5 - produces src/app/frontend/dist for go:embed)
         run: npm run -w @marcfargas/go-mapi-app-frontend build
 
-      - name: Build interceptor DLL
-        run: npm run build:interceptor
+      - name: Build interceptor DLLs and native MAPI32 probes
+        shell: pwsh
+        run: |
+          .\src\interceptor\build.ps1 -Arch x64 -Config Release -Tests -Clean
+          .\src\interceptor\build.ps1 -Arch x86 -Config Release -Tests -Clean
+
+      - name: Test native MAPI32 dispatch and buffer ownership
+        shell: pwsh
+        run: |
+          .\src\interceptor\tests\run_mapi32_stub_integration.ps1 `
+            -X64Dll "$PWD\src\interceptor\build-x64\bin\go-mapi.dll" `
+            -X64Probe "$PWD\src\interceptor\build-x64\bin\go-mapi-mapi32-probe-x64.exe" `
+            -X86Dll "$PWD\src\interceptor\build-x86\bin\go-mapi.dll" `
+            -X86Probe "$PWD\src\interceptor\build-x86\bin\go-mapi-mapi32-probe-x86.exe"
 
       - name: Build Wails app (dev ldflags - unsigned, AUMID only, no OAuth secrets)
         working-directory: src/app
