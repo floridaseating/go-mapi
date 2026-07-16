@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 
 static_assert(sizeof(MapiFileDesc) == (sizeof(void*) == 8 ? 40 : 24));
@@ -93,12 +94,101 @@ int main(int argc, char** argv) {
     }
 
     char testAddress[] = "mapi-canary@example.invalid";
-    auto* recipient = reinterpret_cast<lpMapiRecipDesc>(
+    lpMapiRecipDesc recipient = nullptr;
+    const ULONG resolveResult = resolveName(
+        session, 0, testAddress, 0, 0, &recipient);
+    if (resolveResult != SUCCESS_SUCCESS ||
+        recipient == nullptr ||
+        recipient->lpszName !=
+            reinterpret_cast<char*>(recipient) + sizeof(MapiRecipDesc) ||
+        recipient->ulReserved != 0 ||
+        recipient->ulRecipClass != MAPI_TO ||
+        recipient->lpszName == nullptr ||
+        std::strcmp(recipient->lpszName, testAddress) != 0 ||
+        recipient->lpszAddress == nullptr ||
+        recipient->lpszAddress !=
+            recipient->lpszName + std::strlen(recipient->lpszName) + 1 ||
+        std::strcmp(recipient->lpszAddress,
+                    "SMTP:mapi-canary@example.invalid") != 0 ||
+        recipient->ulEIDSize != 0 ||
+        recipient->lpEntryID != nullptr) {
+        std::cerr << "MAPIResolveName did not return a valid recipient\n";
+        if (recipient != nullptr) {
+            freeBuffer(recipient);
+        }
+        FreeLibrary(module);
+        return 1;
+    }
+    if (freeBuffer(recipient) != SUCCESS_SUCCESS) {
+        std::cerr << "MAPIFreeBuffer rejected the resolved recipient\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    recipient = nullptr;
+
+    lpMapiRecipDesc invalidRecipient = reinterpret_cast<lpMapiRecipDesc>(
         static_cast<uintptr_t>(1));
-    if (resolveName(session, 0, testAddress, 0, 0, &recipient) !=
-            MAPI_E_NOT_SUPPORTED ||
-        recipient != nullptr) {
-        std::cerr << "MAPIResolveName did not fail safely\n";
+    if (resolveName(session, 0, nullptr, 0, 0, &invalidRecipient) !=
+            MAPI_E_UNKNOWN_RECIPIENT ||
+        invalidRecipient != nullptr ||
+        resolveName(session, 0, testAddress, 0, 0, nullptr) != MAPI_E_FAILURE) {
+        std::cerr << "MAPIResolveName invalid-input contract failed\n";
+        FreeLibrary(module);
+        return 1;
+    }
+
+    char emptyAddress[] = "";
+    invalidRecipient = reinterpret_cast<lpMapiRecipDesc>(
+        static_cast<uintptr_t>(1));
+    if (resolveName(session, 0, emptyAddress, 0, 0, &invalidRecipient) !=
+            MAPI_E_UNKNOWN_RECIPIENT ||
+        invalidRecipient != nullptr) {
+        std::cerr << "MAPIResolveName accepted an empty address\n";
+        FreeLibrary(module);
+        return 1;
+    }
+
+    char malformedAddress[] = "one@example@invalid";
+    invalidRecipient = reinterpret_cast<lpMapiRecipDesc>(
+        static_cast<uintptr_t>(1));
+    if (resolveName(session, 0, malformedAddress, 0, 0, &invalidRecipient) !=
+            MAPI_E_UNKNOWN_RECIPIENT ||
+        invalidRecipient != nullptr) {
+        std::cerr << "MAPIResolveName accepted a malformed address\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    invalidRecipient = reinterpret_cast<lpMapiRecipDesc>(
+        static_cast<uintptr_t>(1));
+    if (resolveName(session, 0, testAddress, 0, 1, &invalidRecipient) !=
+            MAPI_E_FAILURE ||
+        invalidRecipient != nullptr) {
+        std::cerr << "MAPIResolveName accepted a nonzero reserved value\n";
+        FreeLibrary(module);
+        return 1;
+    }
+
+    char prefixedAddress[] = "SMTP:prefixed@example.invalid";
+    lpMapiRecipDesc prefixedRecipient = nullptr;
+    if (resolveName(session, 0, prefixedAddress, 0, 0, &prefixedRecipient) !=
+            SUCCESS_SUCCESS ||
+        prefixedRecipient == nullptr ||
+        prefixedRecipient->lpszName != reinterpret_cast<char*>(
+            prefixedRecipient) + sizeof(MapiRecipDesc) ||
+        std::strcmp(prefixedRecipient->lpszName,
+                    "prefixed@example.invalid") != 0 ||
+        prefixedRecipient->lpszAddress != prefixedRecipient->lpszName +
+            std::strlen(prefixedRecipient->lpszName) + 1 ||
+        std::strcmp(prefixedRecipient->lpszAddress, prefixedAddress) != 0) {
+        if (prefixedRecipient != nullptr) {
+            freeBuffer(prefixedRecipient);
+        }
+        std::cerr << "MAPIResolveName SMTP-prefix contract failed\n";
+        FreeLibrary(module);
+        return 1;
+    }
+    if (freeBuffer(prefixedRecipient) != SUCCESS_SUCCESS) {
+        std::cerr << "MAPIFreeBuffer rejected prefixed recipient\n";
         FreeLibrary(module);
         return 1;
     }
