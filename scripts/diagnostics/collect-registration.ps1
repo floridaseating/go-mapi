@@ -299,13 +299,6 @@ $expectedExports = @(
     'MAPILogon',
     'MAPILogoff',
     'MAPIFreeBuffer',
-    'MAPIFindNext',
-    'MAPIReadMail',
-    'MAPISaveMail',
-    'MAPIDeleteMail',
-    'MAPIAddress',
-    'MAPIDetails',
-    'MAPIResolveName',
     'MAPISendDocuments'
 )
 
