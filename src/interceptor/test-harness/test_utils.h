@@ -32,13 +32,8 @@ public:
     // Clean up test files
     static void CleanupTestFiles(const std::string& tempDir);
 
-    // Get the production queue directory used by the interceptor.
+    // Get the go-mapi temp directory
     static std::string GetGoMapiTempDir();
-
-    // Create real source attachments in a process-scoped scratch directory.
-    static std::string CreateAttachmentFixture(const std::string& relativePath);
-    static std::wstring CreateWideAttachmentFixture(const std::wstring& relativePath);
-    static void CleanupAttachmentFixtures();
 
     // Print test result
     static void PrintTestResult(const std::string& testName, bool passed);

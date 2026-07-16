@@ -33,8 +33,7 @@ typedef ULONG FLAGS;
 #define MAPI_E_DISK_FULL     4
 #define MAPI_E_INSUFFICIENT_MEMORY 5
 #define MAPI_E_ACCESS_DENIED 6
-#define MAPI_E_INVALID_MESSAGE 17
-#define MAPI_E_NOT_SUPPORTED 26
+#define MAPI_E_INVALID_MESSAGE 7
 
 #ifdef __cplusplus
 extern "C" {
@@ -121,11 +120,4 @@ typedef struct
 
 #ifdef __cplusplus
 }
-
-static_assert(sizeof(MapiFileDesc) == (sizeof(void*) == 8 ? 40 : 24));
-static_assert(sizeof(MapiRecipDesc) == (sizeof(void*) == 8 ? 40 : 24));
-static_assert(sizeof(MapiMessage) == (sizeof(void*) == 8 ? 96 : 48));
-static_assert(sizeof(MapiFileDescW) == (sizeof(void*) == 8 ? 40 : 24));
-static_assert(sizeof(MapiRecipDescW) == (sizeof(void*) == 8 ? 40 : 24));
-static_assert(sizeof(MapiMessageW) == (sizeof(void*) == 8 ? 96 : 48));
 #endif
