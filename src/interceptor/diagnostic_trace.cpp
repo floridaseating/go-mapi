@@ -68,7 +68,7 @@ std::string DiagnosticTrace::ToJson(const MapiCallTrace& trace) {
         << "\"processArchitecture\":\""
         << EscapeJsonString(trace.processArchitecture) << "\","
         << "\"flags\":" << trace.flags << ','
-        << "\"uiParent\":" << trace.uiParent << ','
+        << "\"hasUiParent\":" << (trace.hasUiParent ? "true" : "false") << ','
         << "\"attachmentCount\":" << trace.attachmentCount << ','
         << "\"attachmentBytes\":" << trace.attachmentBytes << ','
         << "\"result\":";

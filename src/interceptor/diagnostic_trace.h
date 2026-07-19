@@ -18,7 +18,7 @@ struct MapiCallTrace {
     std::string originApp;
     std::string processArchitecture;
     uint32_t flags = 0;
-    uint64_t uiParent = 0;
+    bool hasUiParent = false;
     uint32_t attachmentCount = 0;
     uint64_t attachmentBytes = 0;
     bool hasResult = false;

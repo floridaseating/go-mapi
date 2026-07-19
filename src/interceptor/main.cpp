@@ -45,7 +45,7 @@ public:
             trace_.originApp = CurrentProcessName();
             trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
             trace_.flags = static_cast<uint32_t>(flags);
-            trace_.uiParent = static_cast<uint64_t>(uiParent);
+            trace_.hasUiParent = uiParent != 0;
             (void)go_mapi::DiagnosticTrace::Append(trace_);
         } catch (...) {
             enabled_ = false;
