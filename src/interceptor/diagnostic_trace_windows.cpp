@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <shlobj.h>
+#include <limits>
 
 namespace go_mapi {
 namespace {
@@ -66,6 +67,21 @@ bool DiagnosticTrace::Append(const MapiCallTrace& trace) noexcept {
         std::string line = ToJson(trace);
         line.push_back('\n');
 
+        const bool isEntry = trace.phase == "enter";
+        if (!isEntry && trace.phase != "exit") return false;
+
+        LONGLONG pairedExitBytes = 0;
+        if (isEntry) {
+            MapiCallTrace largestExit = trace;
+            largestExit.phase = "exit";
+            largestExit.hasResult = true;
+            largestExit.result = std::numeric_limits<uint32_t>::max();
+            largestExit.hasDuration = true;
+            largestExit.durationMs = std::numeric_limits<uint64_t>::max();
+            pairedExitBytes = static_cast<LONGLONG>(
+                ToJson(largestExit).size() + 1);
+        }
+
         const std::wstring tracePath = GetTracePath();
         if (tracePath.empty()) return false;
 
@@ -91,10 +107,13 @@ bool DiagnosticTrace::Append(const MapiCallTrace& trace) noexcept {
 
         LARGE_INTEGER size{};
         bool success = GetFileSizeEx(file.get(), &size) != FALSE;
-        if (success && size.QuadPart + static_cast<LONGLONG>(line.size()) > kMaxTraceBytes) {
-            LARGE_INTEGER start{};
-            success = SetFilePointerEx(file.get(), start, nullptr, FILE_BEGIN) != FALSE &&
-                      SetEndOfFile(file.get()) != FALSE;
+        if (success && isEntry) {
+            const auto entryBytes = static_cast<LONGLONG>(line.size());
+            if (size.QuadPart > kMaxTraceBytes ||
+                entryBytes > kMaxTraceBytes - size.QuadPart ||
+                pairedExitBytes > kMaxTraceBytes - size.QuadPart - entryBytes) {
+                return false;
+            }
         }
 
         LARGE_INTEGER end{};

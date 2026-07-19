@@ -8,6 +8,8 @@ file(READ "${MAIN_FILE}" main_source)
 foreach(required_text IN ITEMS
     "class ScopedMutexOwnership"
     "success = FlushFileBuffers(file.get()) != FALSE;"
+    "pairedExitBytes"
+    "trace.phase == \"enter\""
     "entryRecorded_ = go_mapi::DiagnosticTrace::Append(trace_);"
     "if (!enabled_ || !entryRecorded_) return result;"
 )
@@ -20,4 +22,9 @@ endforeach()
 string(FIND "${windows_trace_source}" "ReleaseMutex(mutex.get())" early_release_position)
 if(NOT early_release_position EQUAL -1)
     message(FATAL_ERROR "Trace mutex is released before the file handle closes")
+endif()
+
+string(FIND "${windows_trace_source}" "SetEndOfFile" destructive_rollover_position)
+if(NOT destructive_rollover_position EQUAL -1)
+    message(FATAL_ERROR "Trace rollover can erase a still-in-flight entry")
 endif()
