@@ -24,8 +24,6 @@ TEST_CASE("diagnostic trace serializes the privacy-safe QuickBooks call envelope
     trace.processArchitecture = "x86";
     trace.flags = 9;
     trace.hasUiParent = true;
-    trace.attachmentCount = 1;
-    trace.attachmentBytes = 4242;
     trace.hasResult = true;
     trace.result = 0;
     trace.hasDuration = true;
@@ -37,8 +35,7 @@ TEST_CASE("diagnostic trace serializes the privacy-safe QuickBooks call envelope
           "\"processId\":4242,\"threadId\":73,"
           "\"api\":\"MAPISendMail\",\"originApp\":\"QBW32.EXE\","
           "\"processArchitecture\":\"x86\",\"flags\":9,"
-          "\"hasUiParent\":true,\"attachmentCount\":1,"
-          "\"attachmentBytes\":4242,\"result\":0,\"durationMs\":37}");
+          "\"hasUiParent\":true,\"result\":0,\"durationMs\":37}");
 }
 
 TEST_CASE("diagnostic trace represents an entered call without inventing a result") {
@@ -61,6 +58,8 @@ TEST_CASE("diagnostic trace represents an entered call without inventing a resul
     CHECK(json.find("\"result\":null") != std::string::npos);
     CHECK(json.find("\"durationMs\":null") != std::string::npos);
     CHECK(json.find("\"uiParent\":") == std::string::npos);
+    CHECK(json.find("attachmentCount") == std::string::npos);
+    CHECK(json.find("attachmentBytes") == std::string::npos);
     CHECK(json.find("subject") == std::string::npos);
     CHECK(json.find("body") == std::string::npos);
     CHECK(json.find("recipient") == std::string::npos);
