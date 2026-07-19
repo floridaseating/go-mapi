@@ -86,10 +86,10 @@ set_target_properties(diagnostic_trace_tests PROPERTIES
 
 if(MSVC)
     target_compile_options(diagnostic_trace_tests PRIVATE /W4 /WX-)
-    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32.lib shell32.lib)
+    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32.lib shell32.lib ole32.lib)
 elseif(MINGW)
     target_compile_options(diagnostic_trace_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
-    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32 shell32 -static-libgcc -static-libstdc++)
+    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32 shell32 ole32 -static-libgcc -static-libstdc++)
     target_link_options(diagnostic_trace_tests PRIVATE -static)
 endif()
 

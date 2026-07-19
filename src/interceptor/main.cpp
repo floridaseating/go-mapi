@@ -1,5 +1,4 @@
 #include <windows.h>
-#include <atomic>
 #include <chrono>
 #include <string>
 #include "diagnostic_trace.h"
@@ -38,9 +37,11 @@ public:
             trace_.phase = "enter";
             trace_.processId = GetCurrentProcessId();
             trace_.threadId = GetCurrentThreadId();
-            const auto sequence = nextSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
-            trace_.callId = std::to_string(trace_.processId) + '-' +
-                std::to_string(trace_.threadId) + '-' + std::to_string(sequence);
+            trace_.callId = go_mapi::DiagnosticTrace::NewCallId();
+            if (trace_.callId.empty()) {
+                enabled_ = false;
+                return;
+            }
             trace_.api = api;
             trace_.originApp = CurrentProcessName();
             trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
@@ -71,14 +72,11 @@ public:
     }
 
 private:
-    static std::atomic<uint64_t> nextSequence_;
     std::chrono::steady_clock::time_point started_{};
     go_mapi::MapiCallTrace trace_{};
     bool enabled_ = true;
     bool entryRecorded_ = false;
 };
-
-std::atomic<uint64_t> TraceMapiCall::nextSequence_{0};
 
 } // namespace
 

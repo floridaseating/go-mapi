@@ -4,6 +4,7 @@
 #include "diagnostic_trace.h"
 
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 using namespace go_mapi;
@@ -11,6 +12,20 @@ using namespace go_mapi;
 static_assert(
     noexcept(DiagnosticTrace::Append(std::declval<const MapiCallTrace&>())),
     "diagnostic recording must never throw across a MAPI call");
+
+static_assert(
+    noexcept(DiagnosticTrace::NewCallId()),
+    "diagnostic call-id generation must never throw across a MAPI call");
+
+TEST_CASE("diagnostic call IDs stay unique across independent generations") {
+    std::unordered_set<std::string> ids;
+
+    for (int i = 0; i < 1024; ++i) {
+        const std::string id = DiagnosticTrace::NewCallId();
+        CHECK_FALSE(id.empty());
+        CHECK(ids.insert(id).second);
+    }
+}
 
 TEST_CASE("diagnostic trace serializes the privacy-safe QuickBooks call envelope") {
     MapiCallTrace trace{};

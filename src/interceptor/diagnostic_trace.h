@@ -28,6 +28,7 @@ struct MapiCallTrace {
 class DiagnosticTrace {
 public:
     static std::string UtcTimestampNow();
+    static std::string NewCallId() noexcept;
     static std::string ToJson(const MapiCallTrace& trace);
 
     // Appends one JSONL record to a bounded local diagnostic file. Failures
