@@ -37,6 +37,9 @@ public:
         try {
             started_ = std::chrono::steady_clock::now();
             trace_.timestamp = DiagnosticTrace::UtcTimestampNow();
+            trace_.phase = "summary";
+            trace_.processId = GetCurrentProcessId();
+            trace_.threadId = GetCurrentThreadId();
             trace_.api = api;
             trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
             trace_.flags = static_cast<uint32_t>(flags);
@@ -60,7 +63,9 @@ public:
         if (!enabled_) return result;
         try {
             trace_.attachmentBytes = attachmentBytes;
+            trace_.hasResult = true;
             trace_.result = static_cast<uint32_t>(result);
+            trace_.hasDuration = true;
             trace_.durationMs = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - started_).count());

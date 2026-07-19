@@ -10,6 +10,10 @@ namespace go_mapi {
 // compatibility pilot without copying business content into diagnostics.
 struct MapiCallTrace {
     std::string timestamp;
+    std::string phase;
+    std::string callId;
+    uint32_t processId = 0;
+    uint32_t threadId = 0;
     std::string api;
     std::string originApp;
     std::string processArchitecture;
@@ -17,7 +21,9 @@ struct MapiCallTrace {
     uint64_t uiParent = 0;
     uint32_t attachmentCount = 0;
     uint64_t attachmentBytes = 0;
+    bool hasResult = false;
     uint32_t result = 0;
+    bool hasDuration = false;
     uint64_t durationMs = 0;
 };
 

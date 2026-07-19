@@ -57,8 +57,12 @@ std::string DiagnosticTrace::UtcTimestampNow() {
 std::string DiagnosticTrace::ToJson(const MapiCallTrace& trace) {
     std::ostringstream out;
     out << '{'
-        << "\"version\":1,"
+        << "\"version\":2,"
         << "\"timestamp\":\"" << EscapeJsonString(trace.timestamp) << "\","
+        << "\"phase\":\"" << EscapeJsonString(trace.phase) << "\","
+        << "\"callId\":\"" << EscapeJsonString(trace.callId) << "\","
+        << "\"processId\":" << trace.processId << ','
+        << "\"threadId\":" << trace.threadId << ','
         << "\"api\":\"" << EscapeJsonString(trace.api) << "\","
         << "\"originApp\":\"" << EscapeJsonString(trace.originApp) << "\","
         << "\"processArchitecture\":\""
@@ -67,9 +71,19 @@ std::string DiagnosticTrace::ToJson(const MapiCallTrace& trace) {
         << "\"uiParent\":" << trace.uiParent << ','
         << "\"attachmentCount\":" << trace.attachmentCount << ','
         << "\"attachmentBytes\":" << trace.attachmentBytes << ','
-        << "\"result\":" << trace.result << ','
-        << "\"durationMs\":" << trace.durationMs
-        << '}';
+        << "\"result\":";
+    if (trace.hasResult) {
+        out << trace.result;
+    } else {
+        out << "null";
+    }
+    out << ',' << "\"durationMs\":";
+    if (trace.hasDuration) {
+        out << trace.durationMs;
+    } else {
+        out << "null";
+    }
+    out << '}';
     return out.str();
 }
 
