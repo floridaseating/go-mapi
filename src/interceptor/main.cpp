@@ -46,14 +46,14 @@ public:
             trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
             trace_.flags = static_cast<uint32_t>(flags);
             trace_.hasUiParent = uiParent != 0;
-            (void)go_mapi::DiagnosticTrace::Append(trace_);
+            entryRecorded_ = go_mapi::DiagnosticTrace::Append(trace_);
         } catch (...) {
             enabled_ = false;
         }
     }
 
     ULONG Finish(ULONG result) noexcept {
-        if (!enabled_) return result;
+        if (!enabled_ || !entryRecorded_) return result;
         try {
             trace_.timestamp = go_mapi::DiagnosticTrace::UtcTimestampNow();
             trace_.phase = "exit";
@@ -75,6 +75,7 @@ private:
     std::chrono::steady_clock::time_point started_{};
     go_mapi::MapiCallTrace trace_{};
     bool enabled_ = true;
+    bool entryRecorded_ = false;
 };
 
 std::atomic<uint64_t> TraceMapiCall::nextSequence_{0};

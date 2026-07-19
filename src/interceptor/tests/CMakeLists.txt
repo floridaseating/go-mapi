@@ -124,6 +124,14 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_export_trace_contract.cmake
 )
 
+add_test(
+    NAME trace_durability_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DWINDOWS_TRACE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../diagnostic_trace_windows.cpp
+        -DMAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_trace_durability_contract.cmake
+)
+
 add_executable(mapi_export_contract_tests
     mapi_export_contract_tests.cpp
 )

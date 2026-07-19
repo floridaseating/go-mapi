@@ -24,6 +24,20 @@ private:
     HANDLE value_;
 };
 
+class ScopedMutexOwnership {
+public:
+    explicit ScopedMutexOwnership(HANDLE value) : value_(value) {}
+    ~ScopedMutexOwnership() {
+        if (value_) ReleaseMutex(value_);
+    }
+
+    ScopedMutexOwnership(const ScopedMutexOwnership&) = delete;
+    ScopedMutexOwnership& operator=(const ScopedMutexOwnership&) = delete;
+
+private:
+    HANDLE value_;
+};
+
 } // namespace
 
 std::wstring DiagnosticTrace::GetTracePath() {
@@ -60,6 +74,7 @@ bool DiagnosticTrace::Append(const MapiCallTrace& trace) noexcept {
 
         const DWORD waitResult = WaitForSingleObject(mutex.get(), kTraceLockTimeoutMs);
         if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) return false;
+        ScopedMutexOwnership mutexOwnership(mutex.get());
 
         const HANDLE rawFile = CreateFileW(
             tracePath.c_str(),
@@ -71,7 +86,6 @@ bool DiagnosticTrace::Append(const MapiCallTrace& trace) noexcept {
             nullptr);
         ScopedHandle file(rawFile);
         if (file.get() == INVALID_HANDLE_VALUE) {
-            ReleaseMutex(mutex.get());
             return false;
         }
 
@@ -94,9 +108,10 @@ bool DiagnosticTrace::Append(const MapiCallTrace& trace) noexcept {
                 file.get(), line.data(), static_cast<DWORD>(line.size()), &written, nullptr) != FALSE &&
                 written == static_cast<DWORD>(line.size());
         }
-        if (success) FlushFileBuffers(file.get());
+        if (success) {
+            success = FlushFileBuffers(file.get()) != FALSE;
+        }
 
-        ReleaseMutex(mutex.get());
         return success;
     } catch (...) {
         return false;
