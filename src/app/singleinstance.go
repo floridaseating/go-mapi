@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -19,6 +20,7 @@ const mutexName = `Local\go-mapi-singleton-v3`
 const raiseEventName = `Local\go-mapi-raise-v3`
 
 var (
+	singleInstanceMu sync.Mutex
 	mutexHandle windows.Handle
 	eventHandle windows.Handle
 )
@@ -69,7 +71,9 @@ func acquireSingleInstance() (raised bool, err error) {
 	}
 
 	// We are the first instance. Keep the mutex handle for process lifetime.
+	singleInstanceMu.Lock()
 	mutexHandle = handle
+	singleInstanceMu.Unlock()
 
 	// Create the named event (auto-reset, initial non-signaled) so the second instance can
 	// find and signal it. Create BEFORE wails.Run so second-instance SetEvent works even if
@@ -84,10 +88,14 @@ func acquireSingleInstance() (raised bool, err error) {
 	} else if errors.Is(evtErr, windows.ERROR_ALREADY_EXISTS) {
 		// Stale event from a previously-killed first instance — adopt the existing handle.
 		// SetEvent / WaitForSingleObject both work on the existing kernel object.
+		singleInstanceMu.Lock()
 		eventHandle = evt
+		singleInstanceMu.Unlock()
 		logInfo("adopted existing named event (stale from previous run)")
 	} else {
+		singleInstanceMu.Lock()
 		eventHandle = evt
+		singleInstanceMu.Unlock()
 	}
 
 	return false, nil
@@ -119,13 +127,20 @@ func raiseExistingInstance() error {
 // waitForRaiseSignal blocks on eventHandle; when the second instance calls SetEvent,
 // this returns and the caller should show the main window. Returns when done channel closes.
 func waitForRaiseSignal(done <-chan struct{}, onRaise func()) {
-	if eventHandle == 0 {
-		return // event wasn't created; no raise UX available
-	}
 	for {
+		// Hold the handle lock while Windows waits. releaseSingleInstance then
+		// cannot close or zero the handle out from under this syscall; its worst
+		// case delay is the bounded 500ms tick below.
+		singleInstanceMu.Lock()
+		handle := eventHandle
+		if handle == 0 {
+			singleInstanceMu.Unlock()
+			return // event wasn't created or has already been released
+		}
 		// Wait with a 500ms tick so done-channel shutdown isn't blocked indefinitely.
 		const waitTickMs = 500
-		rc, _ := windows.WaitForSingleObject(eventHandle, waitTickMs)
+		rc, _ := windows.WaitForSingleObject(handle, waitTickMs)
+		singleInstanceMu.Unlock()
 		select {
 		case <-done:
 			return
@@ -139,6 +154,9 @@ func waitForRaiseSignal(done <-chan struct{}, onRaise func()) {
 }
 
 func releaseSingleInstance() {
+	singleInstanceMu.Lock()
+	defer singleInstanceMu.Unlock()
+
 	if mutexHandle != 0 {
 		_ = windows.ReleaseMutex(mutexHandle)
 		_ = windows.CloseHandle(mutexHandle)

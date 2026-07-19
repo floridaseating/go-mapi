@@ -18,11 +18,12 @@
 # checking the symbol that is actually called catches stale-definition scenarios
 # that checking `Reader` would miss.
 if (-not ('GoMapi.AumidReader.PublicReader' -as [type])) {
-    Add-Type -Namespace GoMapi.AumidReader -Name Reader -MemberDefinition @'
+    Add-Type -TypeDefinition @'
         using System;
         using System.Runtime.InteropServices;
         using System.Text;
 
+        namespace GoMapi.AumidReader {
         [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         internal interface IPropertyStore {
             void GetCount(out uint count);
@@ -76,7 +77,8 @@ if (-not ('GoMapi.AumidReader.PublicReader' -as [type])) {
             public static string GetAumid(string lnkPath) {
                 Guid clsidShellLink = new Guid("00021401-0000-0000-C000-000000000046");
                 Guid iidIPersistFile = new Guid("0000010B-0000-0000-C000-000000000046");
-                Native.CoCreateInstance(clsidShellLink, IntPtr.Zero, 1 /*CLSCTX_INPROC_SERVER*/, iidIPersistFile, out object obj);
+                object obj;
+                Native.CoCreateInstance(clsidShellLink, IntPtr.Zero, 1 /*CLSCTX_INPROC_SERVER*/, iidIPersistFile, out obj);
 
                 try {
                     IPersistFile pf = (IPersistFile)obj;
@@ -101,6 +103,7 @@ if (-not ('GoMapi.AumidReader.PublicReader' -as [type])) {
                 }
             }
         }
+        }
 '@
 }
 
@@ -115,4 +118,6 @@ function Get-ShortcutAumid {
     return [GoMapi.AumidReader.PublicReader]::GetAumid($absPath)
 }
 
-Export-ModuleMember -Function Get-ShortcutAumid -ErrorAction SilentlyContinue
+# This helper is dot-sourced by installer.Tests.ps1, so the function is already
+# available in the caller's session. Export-ModuleMember is invalid outside a
+# .psm1 module and causes Pester discovery to abort before any tests can run.

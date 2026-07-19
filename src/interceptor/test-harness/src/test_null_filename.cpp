@@ -35,13 +35,19 @@ int test_null_filename() {
     char toAddress[] = "test@example.com";
     char toName[] = "Test User";
 
-    // Attachment with lpszPathName set but lpszFileName = NULL
-    // This is what Windows "Send to → Mail recipient" does
-    char filePath[] = "C:\\Users\\marc\\Documents\\PyG_BGBL_GLOBAL_SL.xlsx";
+    // Attachment with lpszPathName set but lpszFileName = NULL. Use a real
+    // fixture because production copies the attachment before returning.
+    std::string filePath = TestUtilities::CreateAttachmentFixture(
+        "PyG_BGBL_GLOBAL_SL.xlsx");
+    if (filePath.empty()) {
+        std::cerr << "Failed to create attachment fixture" << std::endl;
+        FreeLibrary(hDll);
+        return 1;
+    }
 
     MapiFileDesc attachment = {};
     attachment.nPosition = static_cast<ULONG>(-1);
-    attachment.lpszPathName = filePath;
+    attachment.lpszPathName = filePath.data();
     attachment.lpszFileName = nullptr;  // NULL — the bug case
 
     MapiRecipDesc recipient = {};
@@ -103,7 +109,14 @@ int test_null_filename() {
         wchar_t wBody[] = L"Wide attachment test";
         wchar_t wToAddr[] = L"test@example.com";
         wchar_t wToName[] = L"Test User";
-        wchar_t wFilePath[] = L"C:\\Users\\marc\\Documents\\Informe_año_2025.pdf";
+        std::wstring wFilePath = TestUtilities::CreateWideAttachmentFixture(
+            L"Informe_año_2025.pdf");
+        if (wFilePath.empty()) {
+            std::cerr << "Failed to create wide attachment fixture" << std::endl;
+            TestUtilities::CleanupTestFiles(tempDir);
+            FreeLibrary(hDll);
+            return 1;
+        }
 
         MapiRecipDescW recipW = {};
         recipW.ulRecipClass = MAPI_TO;
@@ -112,7 +125,7 @@ int test_null_filename() {
 
         MapiFileDescW fileW = {};
         fileW.nPosition = static_cast<ULONG>(-1);
-        fileW.lpszPathName = wFilePath;
+        fileW.lpszPathName = wFilePath.data();
         fileW.lpszFileName = nullptr;  // NULL
 
         MapiMessageW msgW = {};

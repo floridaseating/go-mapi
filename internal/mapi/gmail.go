@@ -2,6 +2,7 @@ package mapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,11 +12,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
-	GmailAPIBase = "https://www.googleapis.com/gmail/v1/users/me"
-	MaxFileSize  = 25 * 1024 * 1024 // 25MB Gmail limit
+	GmailAPIBase       = "https://www.googleapis.com/gmail/v1/users/me"
+	MaxFileSize        = 25 * 1024 * 1024 // 25MB Gmail limit
+	GmailHTTPTimeout   = 30 * time.Second
+	maxAPIResponseSize = 1024 * 1024
 )
 
 // GmailClient handles Gmail API operations
@@ -41,10 +45,58 @@ func NewGmailClientWithBase(token, baseURL string) *GmailClient {
 		baseURL = GmailAPIBase
 	}
 	return &GmailClient{
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: GmailHTTPTimeout},
 		token:      token,
 		baseURL:    baseURL,
 	}
+}
+
+// SendAs represents a Gmail sender identity returned by users.settings.sendAs.list.
+// Callers decide which identities are usable; custom aliases are not ready until
+// Gmail reports verificationStatus "accepted".
+type SendAs struct {
+	SendAsEmail        string `json:"sendAsEmail"`
+	DisplayName        string `json:"displayName"`
+	ReplyToAddress     string `json:"replyToAddress"`
+	Signature          string `json:"signature"`
+	IsPrimary          bool   `json:"isPrimary"`
+	IsDefault          bool   `json:"isDefault"`
+	VerificationStatus string `json:"verificationStatus"`
+}
+
+type sendAsListResponse struct {
+	SendAs []SendAs `json:"sendAs"`
+}
+
+// ListSendAs returns the authenticated account's primary address and custom
+// sender aliases. The caller must filter unverified custom aliases before use.
+func (gc *GmailClient) ListSendAs(ctx context.Context) ([]SendAs, error) {
+	url := fmt.Sprintf("%s/settings/sendAs", gc.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create send-as request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+gc.token)
+
+	resp, err := gc.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list send-as aliases: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("token expired")
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+		return nil, fmt.Errorf("Gmail API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result sendAsListResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponseSize)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to parse send-as response: %w", err)
+	}
+	return result.SendAs, nil
 }
 
 // DraftResponse represents a Gmail API draft creation response
@@ -52,55 +104,108 @@ type DraftResponse struct {
 	ID string `json:"id"`
 }
 
+// MessageResponse represents a Gmail API message-send response.
+type MessageResponse struct {
+	ID string `json:"id"`
+}
+
+type rawMessagePayload struct {
+	Raw string `json:"raw"`
+}
+
+type createDraftRequest struct {
+	Message rawMessagePayload `json:"message"`
+}
+
 // CreateDraft creates a Gmail draft from a MailMessage, including attachments.
 // Builds the full MIME message locally (one API call, no round-trips).
-func (gc *GmailClient) CreateDraft(msg *MailMessage) (string, error) {
-	// Build full MIME message with attachments
+func (gc *GmailClient) CreateDraft(ctx context.Context, msg *MailMessage) (string, error) {
+	encodedMsg, err := encodeMailMessage(msg)
+	if err != nil {
+		return "", err
+	}
+
+	body := createDraftRequest{
+		Message: rawMessagePayload{Raw: encodedMsg},
+	}
+	var draft DraftResponse
+	if err := gc.postGmailJSON(ctx, "/drafts", "create draft", body, &draft); err != nil {
+		return "", err
+	}
+	if draft.ID == "" {
+		return "", fmt.Errorf("failed to parse response: missing draft id")
+	}
+	return draft.ID, nil
+}
+
+// SendMessage sends a MailMessage immediately through Gmail. Callers must not
+// automatically retry an error after dispatch because a lost/invalid response
+// can leave the delivery outcome ambiguous.
+func (gc *GmailClient) SendMessage(ctx context.Context, msg *MailMessage) (string, error) {
+	encodedMsg, err := encodeMailMessage(msg)
+	if err != nil {
+		return "", err
+	}
+
+	var message MessageResponse
+	if err := gc.postGmailJSON(ctx, "/messages/send", "send message", rawMessagePayload{Raw: encodedMsg}, &message); err != nil {
+		return "", err
+	}
+	if message.ID == "" {
+		return "", fmt.Errorf("failed to parse response: missing message id")
+	}
+	return message.ID, nil
+}
+
+func encodeMailMessage(msg *MailMessage) (string, error) {
 	mimeMsg, err := BuildFullMIME(msg)
 	if err != nil {
 		return "", fmt.Errorf("failed to build MIME message: %w", err)
 	}
+	return Base64URLEncode(mimeMsg), nil
+}
 
-	encodedMsg := Base64URLEncode(mimeMsg)
-
-	body := map[string]interface{}{
-		"message": map[string]interface{}{
-			"raw": encodedMsg,
-		},
-	}
+func (gc *GmailClient) postGmailJSON(ctx context.Context, path, operation string, body, result any) error {
 	bodyJSON, err := json.Marshal(body)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/drafts", gc.baseURL)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(bodyJSON))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gc.baseURL+path, bytes.NewReader(bodyJSON))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+gc.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := gc.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to create draft: %w", err)
+		return fmt.Errorf("failed to %s: %w", operation, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 401 {
-		return "", fmt.Errorf("token expired")
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("token expired")
 	}
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Gmail API error (%d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var draft DraftResponse
-	if err := json.NewDecoder(resp.Body).Decode(&draft); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+	if resp.StatusCode != http.StatusOK {
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize))
+		if readErr != nil {
+			return fmt.Errorf("Gmail API error (%d): failed to read response: %w", resp.StatusCode, readErr)
+		}
+		return fmt.Errorf("Gmail API error (%d): %s", resp.StatusCode, string(respBody))
 	}
 
-	return draft.ID, nil
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseSize+1))
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+	if len(responseBody) > maxAPIResponseSize {
+		return fmt.Errorf("failed to parse response: response exceeds %d bytes", maxAPIResponseSize)
+	}
+	if err := json.Unmarshal(responseBody, result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+	return nil
 }
 
 // BuildFullMIME builds a complete RFC 2822 message from a MailMessage,

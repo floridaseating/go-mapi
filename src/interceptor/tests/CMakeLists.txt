@@ -69,3 +69,119 @@ endif()
 
 add_test(NAME fs_utils_tests
          COMMAND fs_utils_tests)
+
+add_executable(diagnostic_trace_tests
+    diagnostic_trace_tests.cpp
+    ../diagnostic_trace.cpp
+)
+
+target_include_directories(diagnostic_trace_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
+)
+
+set_target_properties(diagnostic_trace_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+if(MSVC)
+    target_compile_options(diagnostic_trace_tests PRIVATE /W4 /WX-)
+    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32.lib shell32.lib ole32.lib)
+elseif(MINGW)
+    target_compile_options(diagnostic_trace_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_link_libraries(diagnostic_trace_tests PRIVATE kernel32 shell32 ole32 -static-libgcc -static-libstdc++)
+    target_link_options(diagnostic_trace_tests PRIVATE -static)
+endif()
+
+add_test(NAME diagnostic_trace_tests
+         COMMAND diagnostic_trace_tests)
+
+# DllMain runs under the Windows loader lock. Keep its implementation exactly
+# inert so loading the provider cannot touch Shell APIs, files, or C++ runtime
+# facilities before a caller enters an exported MAPI function.
+add_test(
+    NAME dllmain_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DSOURCE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_dllmain_contract.cmake
+)
+
+add_test(
+    NAME simple_mapi_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DEXPORTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_exports.def
+        -DTYPES_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_types.h
+        -DIMPL_HEADER_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_impl.h
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_mapi_surface_contract.cmake
+)
+
+add_test(
+    NAME export_trace_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DEXPORTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_exports.def
+        -DMAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp
+        -DIMPL_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_impl.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_export_trace_contract.cmake
+)
+
+add_test(
+    NAME trace_durability_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DWINDOWS_TRACE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../diagnostic_trace_windows.cpp
+        -DMAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_trace_durability_contract.cmake
+)
+
+add_executable(mapi_export_contract_tests
+    mapi_export_contract_tests.cpp
+)
+
+set_target_properties(mapi_export_contract_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+if(MSVC)
+    target_compile_options(mapi_export_contract_tests PRIVATE /W4 /WX-)
+    target_link_libraries(mapi_export_contract_tests PRIVATE kernel32.lib)
+elseif(MINGW)
+    target_compile_options(mapi_export_contract_tests PRIVATE -Wall -Wextra)
+    target_link_libraries(mapi_export_contract_tests PRIVATE kernel32 -static-libgcc -static-libstdc++)
+    target_link_options(mapi_export_contract_tests PRIVATE -static)
+endif()
+
+add_dependencies(mapi_export_contract_tests go-mapi)
+
+add_test(NAME mapi_export_contract_tests
+         COMMAND mapi_export_contract_tests $<TARGET_FILE:go-mapi>)
+
+add_test(
+    NAME resolve_name_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DIMPL_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_impl.cpp
+        -DTYPES_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_types.h
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_resolve_name_contract.cmake
+)
+
+add_executable(mapi32_stub_probe
+    mapi32_stub_probe.cpp
+)
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(mapi32_probe_output_name "go-mapi-mapi32-probe-x64")
+else()
+    set(mapi32_probe_output_name "go-mapi-mapi32-probe-x86")
+endif()
+
+set_target_properties(mapi32_stub_probe PROPERTIES
+    OUTPUT_NAME "${mapi32_probe_output_name}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+if(MSVC)
+    target_compile_options(mapi32_stub_probe PRIVATE /W4 /WX-)
+    target_link_libraries(mapi32_stub_probe PRIVATE kernel32.lib)
+elseif(MINGW)
+    target_compile_options(mapi32_stub_probe PRIVATE -Wall -Wextra)
+    target_link_libraries(mapi32_stub_probe PRIVATE kernel32 -static-libgcc -static-libstdc++)
+    target_link_options(mapi32_stub_probe PRIVATE -static)
+endif()

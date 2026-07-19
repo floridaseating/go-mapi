@@ -1,0 +1,140 @@
+#include "diagnostic_trace.h"
+
+#include <windows.h>
+#include <shlobj.h>
+#include <limits>
+
+namespace go_mapi {
+namespace {
+
+constexpr LONGLONG kMaxTraceBytes = 1024 * 1024;
+constexpr DWORD kTraceLockTimeoutMs = 50;
+constexpr wchar_t kTraceMutexName[] =
+    L"Local\\FloridaSeating.GoMapi.DiagnosticTrace";
+
+class ScopedHandle {
+public:
+    explicit ScopedHandle(HANDLE value) : value_(value) {}
+    ~ScopedHandle() {
+        if (value_ && value_ != INVALID_HANDLE_VALUE) CloseHandle(value_);
+    }
+
+    HANDLE get() const { return value_; }
+
+private:
+    HANDLE value_;
+};
+
+class ScopedMutexOwnership {
+public:
+    explicit ScopedMutexOwnership(HANDLE value) : value_(value) {}
+    ~ScopedMutexOwnership() {
+        if (value_) ReleaseMutex(value_);
+    }
+
+    ScopedMutexOwnership(const ScopedMutexOwnership&) = delete;
+    ScopedMutexOwnership& operator=(const ScopedMutexOwnership&) = delete;
+
+private:
+    HANDLE value_;
+};
+
+} // namespace
+
+std::wstring DiagnosticTrace::GetTracePath() {
+    wchar_t localAppData[MAX_PATH];
+    const HRESULT result = SHGetFolderPathW(
+        nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData);
+    if (FAILED(result)) return L"";
+
+    std::wstring directory(localAppData);
+    directory += L"\\go-mapi\\diagnostics";
+    const int createResult = SHCreateDirectoryExW(nullptr, directory.c_str(), nullptr);
+    if (createResult != ERROR_SUCCESS &&
+        createResult != ERROR_ALREADY_EXISTS &&
+        createResult != ERROR_FILE_EXISTS) {
+        return L"";
+    }
+
+    return directory + L"\\mapi-calls.jsonl";
+}
+
+bool DiagnosticTrace::Append(const MapiCallTrace& trace) noexcept {
+    try {
+        // Complete every potentially allocating operation before taking the
+        // cross-process mutex. If allocation fails, diagnostics are skipped
+        // without ever owning a synchronization object.
+        std::string line = ToJson(trace);
+        line.push_back('\n');
+
+        const bool isEntry = trace.phase == "enter";
+        if (!isEntry && trace.phase != "exit") return false;
+
+        LONGLONG pairedExitBytes = 0;
+        if (isEntry) {
+            MapiCallTrace largestExit = trace;
+            largestExit.phase = "exit";
+            largestExit.hasResult = true;
+            largestExit.result = std::numeric_limits<uint32_t>::max();
+            largestExit.hasDuration = true;
+            largestExit.durationMs = std::numeric_limits<uint64_t>::max();
+            pairedExitBytes = static_cast<LONGLONG>(
+                ToJson(largestExit).size() + 1);
+        }
+
+        const std::wstring tracePath = GetTracePath();
+        if (tracePath.empty()) return false;
+
+        ScopedHandle mutex(CreateMutexW(nullptr, FALSE, kTraceMutexName));
+        if (!mutex.get()) return false;
+
+        const DWORD waitResult = WaitForSingleObject(mutex.get(), kTraceLockTimeoutMs);
+        if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) return false;
+        ScopedMutexOwnership mutexOwnership(mutex.get());
+
+        const HANDLE rawFile = CreateFileW(
+            tracePath.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+        ScopedHandle file(rawFile);
+        if (file.get() == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        LARGE_INTEGER size{};
+        bool success = GetFileSizeEx(file.get(), &size) != FALSE;
+        if (success && isEntry) {
+            const auto entryBytes = static_cast<LONGLONG>(line.size());
+            if (size.QuadPart > kMaxTraceBytes ||
+                entryBytes > kMaxTraceBytes - size.QuadPart ||
+                pairedExitBytes > kMaxTraceBytes - size.QuadPart - entryBytes) {
+                return false;
+            }
+        }
+
+        LARGE_INTEGER end{};
+        if (success) {
+            success = SetFilePointerEx(file.get(), end, nullptr, FILE_END) != FALSE;
+        }
+
+        DWORD written = 0;
+        if (success) {
+            success = WriteFile(
+                file.get(), line.data(), static_cast<DWORD>(line.size()), &written, nullptr) != FALSE &&
+                written == static_cast<DWORD>(line.size());
+        }
+        if (success) {
+            success = FlushFileBuffers(file.get()) != FALSE;
+        }
+
+        return success;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace go_mapi

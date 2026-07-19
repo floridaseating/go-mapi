@@ -3,12 +3,16 @@
 #include "fs_utils.h"
 #include "json_writer.h"
 #include <windows.h>
+#include <objbase.h>
 #include <psapi.h>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace go_mapi {
 
@@ -181,10 +185,10 @@ ULONG MapiImpl::MAPILogon(
     ULONG ulReserved,
     LPLHANDLE lphSession
 ) {
-    // Stub: just return success
-    if (lphSession) {
-        *lphSession = 1;  // Return a dummy session handle
+    if (!lphSession) {
+        return MAPI_E_FAILURE;
     }
+    *lphSession = 1;
     return SUCCESS_SUCCESS;
 }
 
@@ -199,7 +203,185 @@ ULONG MapiImpl::MAPILogoff(
 }
 
 ULONG MapiImpl::MAPIFreeBuffer(LPVOID pv) {
-    // Stub: nothing to free in our implementation
+    CoTaskMemFree(pv);
+    return SUCCESS_SUCCESS;
+}
+
+ULONG MapiImpl::MAPIFindNext(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszMessageType,
+    LPSTR lpszSeedMessageID,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPSTR lpszMessageID
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIReadMail(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszMessageID,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPMapiMessage* lppMessage
+) {
+    if (lppMessage) {
+        *lppMessage = nullptr;
+    }
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPISaveMail(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPMapiMessage lpMessage,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPSTR lpszMessageID
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIDeleteMail(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszMessageID,
+    FLAGS flFlags,
+    ULONG ulReserved
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIAddress(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszCaption,
+    ULONG nEditFields,
+    LPSTR lpszLabels,
+    ULONG nRecips,
+    LPMapiRecipDesc lpRecips,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    ULONG* lpnNewRecips,
+    LPMapiRecipDesc* lppNewRecips
+) {
+    if (lpnNewRecips) {
+        *lpnNewRecips = 0;
+    }
+    if (lppNewRecips) {
+        *lppNewRecips = nullptr;
+    }
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIDetails(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPMapiRecipDesc lpRecip,
+    FLAGS flFlags,
+    ULONG ulReserved
+) {
+    return MAPI_E_NOT_SUPPORTED;
+}
+
+ULONG MapiImpl::MAPIResolveName(
+    LHANDLE lhSession,
+    ULONG_PTR ulUIParam,
+    LPSTR lpszName,
+    FLAGS flFlags,
+    ULONG ulReserved,
+    LPMapiRecipDesc* lppRecip
+) {
+    if (!lppRecip) {
+        return MAPI_E_FAILURE;
+    }
+    *lppRecip = nullptr;
+    if (ulReserved != 0) {
+        return MAPI_E_FAILURE;
+    }
+    if (!lpszName || lpszName[0] == '\0') {
+        return MAPI_E_UNKNOWN_RECIPIENT;
+    }
+
+    const size_t inputLength = std::strlen(lpszName);
+    const bool hasSmtpPrefix = inputLength >= 5 &&
+        (lpszName[0] == 'S' || lpszName[0] == 's') &&
+        (lpszName[1] == 'M' || lpszName[1] == 'm') &&
+        (lpszName[2] == 'T' || lpszName[2] == 't') &&
+        (lpszName[3] == 'P' || lpszName[3] == 'p') &&
+        lpszName[4] == ':';
+    const char* displayName = hasSmtpPrefix ? lpszName + 5 : lpszName;
+    const size_t displayLength = hasSmtpPrefix ? inputLength - 5 : inputLength;
+    if (displayLength < 3) {
+        return MAPI_E_UNKNOWN_RECIPIENT;
+    }
+
+    size_t atIndex = displayLength;
+    for (size_t index = 0; index < displayLength; ++index) {
+        const unsigned char character =
+            static_cast<unsigned char>(displayName[index]);
+        if (character <= 0x20 || character == 0x7f) {
+            return MAPI_E_UNKNOWN_RECIPIENT;
+        }
+        if (character == '@') {
+            if (atIndex != displayLength) {
+                return MAPI_E_UNKNOWN_RECIPIENT;
+            }
+            atIndex = index;
+        }
+    }
+    if (atIndex == 0 || atIndex >= displayLength - 1) {
+        return MAPI_E_UNKNOWN_RECIPIENT;
+    }
+
+    const size_t maxSize = std::numeric_limits<size_t>::max();
+    if (!hasSmtpPrefix && inputLength > maxSize - 5) {
+        return MAPI_E_INSUFFICIENT_MEMORY;
+    }
+    const size_t addressLength = hasSmtpPrefix
+        ? inputLength
+        : inputLength + 5;
+    size_t allocationSize = sizeof(MapiRecipDesc);
+    const auto addAllocationBytes = [&allocationSize, maxSize](size_t amount) {
+        if (amount > maxSize - allocationSize) {
+            return false;
+        }
+        allocationSize += amount;
+        return true;
+    };
+    if (!addAllocationBytes(displayLength) ||
+        !addAllocationBytes(1) ||
+        !addAllocationBytes(addressLength) ||
+        !addAllocationBytes(1)) {
+        return MAPI_E_INSUFFICIENT_MEMORY;
+    }
+
+    auto* descriptor = static_cast<LPMapiRecipDesc>(
+        CoTaskMemAlloc(allocationSize));
+    if (!descriptor) {
+        return MAPI_E_INSUFFICIENT_MEMORY;
+    }
+    std::memset(descriptor, 0, allocationSize);
+
+    char* cursor = reinterpret_cast<char*>(descriptor) + sizeof(*descriptor);
+    descriptor->lpszName = cursor;
+    std::memcpy(cursor, displayName, displayLength);
+    cursor[displayLength] = '\0';
+    cursor += displayLength + 1;
+
+    descriptor->lpszAddress = cursor;
+    if (hasSmtpPrefix) {
+        std::memcpy(cursor, lpszName, inputLength);
+    } else {
+        std::memcpy(cursor, "SMTP:", 5);
+        std::memcpy(cursor + 5, lpszName, inputLength);
+    }
+    cursor[addressLength] = '\0';
+
+    descriptor->ulRecipClass = MAPI_TO;
+    *lppRecip = descriptor;
     return SUCCESS_SUCCESS;
 }
 
@@ -210,8 +392,8 @@ ULONG MapiImpl::MAPISendDocuments(
     LPSTR lpszFileNames,
     ULONG ulReserved
 ) {
-    // Stub: not implemented yet
-    return SUCCESS_SUCCESS;
+    // Do not report success while silently discarding requested documents.
+    return MAPI_E_NOT_SUPPORTED;
 }
 
 } // namespace go_mapi

@@ -1,0 +1,35 @@
+if(NOT DEFINED EXPORTS_FILE OR NOT DEFINED MAIN_FILE OR NOT DEFINED IMPL_FILE)
+    message(FATAL_ERROR "EXPORTS_FILE, MAIN_FILE, and IMPL_FILE are required")
+endif()
+
+file(STRINGS "${EXPORTS_FILE}" export_lines)
+file(READ "${MAIN_FILE}" main_source)
+file(READ "${IMPL_FILE}" impl_source)
+
+set(export_count 0)
+foreach(line IN LISTS export_lines)
+    string(STRIP "${line}" line)
+    if(line STREQUAL "" OR line STREQUAL "EXPORTS" OR line MATCHES "^LIBRARY ")
+        continue()
+    endif()
+
+    string(REGEX MATCH "^[A-Za-z][A-Za-z0-9_]*" export_name "${line}")
+    if(export_name STREQUAL "")
+        message(FATAL_ERROR "Unrecognized export line: ${line}")
+    endif()
+
+    math(EXPR export_count "${export_count} + 1")
+    string(FIND "${main_source}" "TraceMapiCall trace(\"${export_name}\"" trace_position)
+    if(trace_position EQUAL -1)
+        message(FATAL_ERROR "Missing boundary entry/exit trace for ${export_name}")
+    endif()
+endforeach()
+
+if(NOT export_count EQUAL 13)
+    message(FATAL_ERROR "Expected 13 Simple MAPI exports, found ${export_count}")
+endif()
+
+string(FIND "${impl_source}" "class SendCallTrace" legacy_trace_position)
+if(NOT legacy_trace_position EQUAL -1)
+    message(FATAL_ERROR "Legacy inner SendCallTrace would duplicate boundary records")
+endif()

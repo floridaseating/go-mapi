@@ -147,7 +147,7 @@ func (m *automode) draftOne(e mapi.EmailWithId) error {
 
 	callErr := m.app.MakeAuthenticatedGmailCall(ctx, func(token string) (int, error) {
 		gc := mapi.NewGmailClientWithBase(token, gmailBaseURLOverride)
-		_, err := gc.CreateDraft(e.Message)
+		_, err := gc.CreateDraft(ctx, e.Message)
 		if err != nil {
 			// RESEARCH §4 line 640-650: CreateDraft does not expose HTTP status code.
 			// "token expired" text means 401 (see gmail.go:91); everything else is 500.

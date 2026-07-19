@@ -77,7 +77,6 @@ Var AutoUpdateCheckboxState   ; nsDialogs handle for the FinishPage-adjacent che
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${__FILEDIR__}\..\..\LICENSE"
-!insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 ; Phase 11.1 D-07: AutoUpdate opt-in checkbox page. Default OFF. /AUTOUPDATE=1
 ; on the command line forces enable for silent installs (the page is skipped
@@ -150,11 +149,20 @@ FunctionEnd
 ;------------------------------------------------------------------------------
 
 Section "Install" SecInstall
+  ; The Simple MAPI registration below intentionally uses one shared
+  ; REG_EXPAND_SZ value (%ProgramFiles%\go-mapi\go-mapi.dll). Windows expands
+  ; %ProgramFiles% according to the caller's bitness, so both physical DLL
+  ; locations must remain fixed. Ignore an interactive or /D= override rather
+  ; than installing the x64 payload somewhere the shared registration cannot
+  ; resolve.
+  StrCpy $INSTDIR "$PROGRAMFILES64\go-mapi"
+
   ; QUICK-260423-ntu T2 — if a previous install's go-mapi.exe is running in
   ; $INSTDIR, give it a chance to close cleanly (WM_CLOSE via taskkill
   ; without /F triggers the intentionalQuit path in src/app/main.go) before
   ; we overwrite the binary. Silent mode auto-retries; interactive mode
-  ; prompts the user. MUST be the first statement in the section.
+  ; prompts the user. MUST be the first operational guard after the fixed
+  ; installation path is restored.
   Call EnsureAppNotRunning
 
   SetOutPath "$INSTDIR"
@@ -165,8 +173,10 @@ Section "Install" SecInstall
   ;
   ; QUICK-260423-ntu T3c — dual-bitness layout: x64 DLL lands in $INSTDIR
   ; (= $PROGRAMFILES64\go-mapi) for native MAPI callers; x86 DLL lands in
-  ; $PROGRAMFILES32\go-mapi for legacy 32-bit MAPI callers. Registry
-  ; DLLPath writes below route each view to the matching-bitness DLL.
+  ; $PROGRAMFILES32\go-mapi for legacy 32-bit MAPI callers. Windows 7+
+  ; shares HKLM\SOFTWARE\Clients across registry views, so DLLPath is a
+  ; REG_EXPAND_SZ using %ProgramFiles%. Each caller expands that variable
+  ; according to its own process bitness and reaches the matching DLL.
   ; PHASE 11.1 T4 (D-04): explicit Delete + SetOverwrite try collapses transient
   ; AV/filter holds into a no-op rather than aborting the installer. RESEARCH
   ; §Pattern 1 + §Pitfall 1. NSIS default SetOverwrite is `on`, which makes
@@ -208,19 +218,10 @@ Section "Install" SecInstall
   ; D-09 — MAPI handler registration (machine-wide).
   ; Subkey + DLLPath are set first; the HKLM\SOFTWARE\Clients\Mail\(Default)
   ; overwrite happens AFTER the backup call above.
+  SetRegView 64
   WriteRegStr HKLM "SOFTWARE\Clients\Mail\go-mapi" "" "go-mapi"
-  WriteRegStr HKLM "SOFTWARE\Clients\Mail\go-mapi" "DLLPath" "$INSTDIR\go-mapi.dll"
+  WriteRegExpandStr HKLM "SOFTWARE\Clients\Mail\go-mapi" "DLLPath" "%ProgramFiles%\go-mapi\go-mapi.dll"
   WriteRegStr HKLM "SOFTWARE\Clients\Mail" "" "go-mapi"
-
-  ; QUICK-260423-ntu T3c — 32-bit registry view. SetRegView 32 redirects
-  ; HKLM reads/writes into the WOW6432Node subtree, matching the existing
-  ; pattern used by DetectWebView2 (lines 269/282/292/300). This routes
-  ; 32-bit MAPI callers to the i686 DLL at $PROGRAMFILES32\go-mapi.
-  SetRegView 32
-  WriteRegStr HKLM "SOFTWARE\Clients\Mail\go-mapi" "" "go-mapi"
-  WriteRegStr HKLM "SOFTWARE\Clients\Mail\go-mapi" "DLLPath" "$PROGRAMFILES32\go-mapi\go-mapi.dll"
-  WriteRegStr HKLM "SOFTWARE\Clients\Mail" "" "go-mapi"
-  SetRegView default
 
   ; Uninstaller binary
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -254,9 +255,9 @@ SectionEnd
 ;     {"previousClient": "<name>"|null, "backedUpAt": "<ISO-8601>"}
 ; so the uninstaller (plan 10-04) can restore the pre-install Mail client.
 ;
-; Upgrade case (current (Default) is already "go-mapi") intentionally preserves
-; the existing backup — overwriting would lose the original previous-client
-; name across reinstalls.
+; Upgrade case (current (Default) is already "go-mapi") preserves the existing
+; backup, migrates the legacy misplaced backup, or records an explicit null
+; recovery state when the original client can no longer be determined.
 ;
 ; Timestamp primitive: nsExec::ExecToStack invokes powershell.exe once to emit
 ; an ISO-8601 UTC date. nsExec ships with core NSIS, so no additional plugin
@@ -265,34 +266,26 @@ SectionEnd
 ;------------------------------------------------------------------------------
 
 Function BackupPreviousMailClient
-  ; `$APPDATA\..\..\ProgramData` resolves to `%ProgramData%` at install time
-  ; (admin context). Same primitive used by the uninstaller section stub.
-  CreateDirectory "$APPDATA\..\..\ProgramData\go-mapi\uninst"
+  ; Resolve %ProgramData% directly. Deriving it from $APPDATA is incorrect:
+  ; AppData\Roaming\..\.. lands at the user profile, not the system drive root.
+  ReadEnvStr $6 PROGRAMDATA
+  CreateDirectory "$6\go-mapi\uninst"
 
+  SetRegView 64
   ReadRegStr $0 HKLM "SOFTWARE\Clients\Mail" ""
-
-  ; QUICK-260423-ntu T3c — also capture the WOW6432 view's (Default)
-  ; Mail client so the uninstaller can restore both views symmetrically.
-  SetRegView 32
-  ReadRegStr $4 HKLM "SOFTWARE\Clients\Mail" ""
-  SetRegView default
 
   ; Upgrade case: existing install. Preserve original backup, skip write.
   StrCmp $0 "go-mapi" AlreadyUs
   ; Clean install with no prior default Mail client.
   StrCmp $0 "" BackupNull
 
-  ; WR-02: escape $0 (and $4) for JSON string context before interpolation.
+  ; WR-02: escape $0 for JSON string context before interpolation.
   ; A mail client display name may legally contain `"` or `\` (e.g. locale-
   ; specific or custom enterprise names) which would otherwise produce
   ; invalid JSON and break the uninstaller's restore path.
   Push $0
   Call EscapeJsonString
   Pop $0
-
-  Push $4
-  Call EscapeJsonString
-  Pop $4
 
   ; Get ISO-8601 UTC timestamp via Windows PowerShell (not pwsh — end-user
   ; machines may only have PS 5.1 per §Anti-Patterns in 10-RESEARCH.md).
@@ -301,15 +294,10 @@ Function BackupPreviousMailClient
   Pop $3   ; stdout (timestamp + trailing CRLF)
   StrCpy $3 $3 -2   ; strip trailing \r\n
 
-  FileOpen  $1 "$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json" w
-  StrCmp $4 "" BackupWriteNative32
-  FileWrite $1 '{"previousClient":"$0","previousClient32":"$4","backedUpAt":"$3"}'
-  Goto BackupWriteDone
-BackupWriteNative32:
+  FileOpen  $1 "$6\go-mapi\uninst\previous-mail-client.json" w
   FileWrite $1 '{"previousClient":"$0","previousClient32":null,"backedUpAt":"$3"}'
-BackupWriteDone:
   FileClose $1
-  DetailPrint "Previous Mail client backed up: native='$0' wow6432='$4'"
+  DetailPrint "Previous Mail client backed up: '$0'"
   Return
 
 BackupNull:
@@ -318,24 +306,39 @@ BackupNull:
   Pop $3
   StrCpy $3 $3 -2
 
-  ; Also escape $4 for the WOW6432 side of the null-backup path (it may
-  ; still have a non-empty value even when the native view is empty).
-  Push $4
-  Call EscapeJsonString
-  Pop $4
-
-  FileOpen  $1 "$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json" w
-  StrCmp $4 "" BackupNullNoWow
-  FileWrite $1 '{"previousClient":null,"previousClient32":"$4","backedUpAt":"$3"}'
-  Goto BackupNullDone
-BackupNullNoWow:
+  FileOpen  $1 "$6\go-mapi\uninst\previous-mail-client.json" w
   FileWrite $1 '{"previousClient":null,"previousClient32":null,"backedUpAt":"$3"}'
-BackupNullDone:
   FileClose $1
-  DetailPrint "No previous native Mail client (wow6432='$4' backed up)"
+  DetailPrint "No previous Mail client"
   Return
 
 AlreadyUs:
+  IfFileExists "$6\go-mapi\uninst\previous-mail-client.json" BackupPreserved
+  ; Releases before this fix wrote beneath the installing user's profile.
+  ; Migrate that file forward without deleting the legacy copy.
+  IfFileExists "$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json" 0 BackupUnknown
+  CopyFiles /SILENT "$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json" "$6\go-mapi\uninst\previous-mail-client.json"
+  IfFileExists "$6\go-mapi\uninst\previous-mail-client.json" BackupMigrated
+
+BackupUnknown:
+  ; The original client is no longer recoverable. Record an explicit null so
+  ; uninstall uses its safe Outlook/Windows Mail fallback instead of preserving
+  ; a missing backup forever.
+  nsExec::ExecToStack 'powershell.exe -NoProfile -Command "[DateTime]::UtcNow.ToString(\"yyyy-MM-ddTHH:mm:ssZ\")"'
+  Pop $2
+  Pop $3
+  StrCpy $3 $3 -2
+  FileOpen  $1 "$6\go-mapi\uninst\previous-mail-client.json" w
+  FileWrite $1 '{"previousClient":null,"previousClient32":null,"backedUpAt":"$3"}'
+  FileClose $1
+  DetailPrint "Upgrade backup missing — recorded null recovery state"
+  Return
+
+BackupMigrated:
+  DetailPrint "Upgrade detected — migrated legacy previous-mail-client.json"
+  Return
+
+BackupPreserved:
   DetailPrint "Upgrade detected — preserving existing previous-mail-client.json"
   Return
 FunctionEnd
@@ -572,7 +575,7 @@ WebView2NotFound:
   ; IN-04: reset registry view before returning so subsequent registry writes
   ; in the install section (AddFirewallRule, future growth) are not silently
   ; redirected through WOW6432Node or forced to the 32-bit view.
-  SetRegView default
+  SetRegView 64
   Pop $1
   Pop $0
   Push "0"
@@ -580,7 +583,7 @@ WebView2NotFound:
 
 WebView2Found:
   ; IN-04: see WebView2NotFound above — reset view before returning.
-  SetRegView default
+  SetRegView 64
   DetailPrint "WebView2 runtime detected: $0"
   Pop $1
   Pop $0
@@ -862,25 +865,20 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\go-mapi.lnk"
   SetShellVarContext current
 
-  ; 3. MAPI handler key (native view)
+  ; 3. MAPI handler key. HKLM\SOFTWARE\Clients is shared across 32/64-bit
+  ; views on supported Windows versions, so one deletion removes the shared
+  ; registration used by both MAPI stubs.
+  SetRegView 64
   DeleteRegKey HKLM "SOFTWARE\Clients\Mail\go-mapi"
-
-  ; 3b. QUICK-260423-ntu T3c — WOW6432 MAPI handler key (32-bit view)
-  SetRegView 32
-  DeleteRegKey HKLM "SOFTWARE\Clients\Mail\go-mapi"
-  SetRegView default
 
   ; 4. Restore (Default) Mail client from backup (D-11)
   Call un.RestorePreviousMailClient
 
   ; Phase 11.1 D-18 case 6: scrub silent-update staging dir (Plan 11.1-04 writes
   ; here under SYSTEM context; Plan 11.1-05 owns the cleanup).
-  ; Use ReadEnvStr to read %PROGRAMDATA% directly. The `$APPDATA\..\..\ProgramData`
-  ; pattern used elsewhere in this file (BackupPreviousMailClient, RestorePreviousMailClient)
-  ; resolves to `<userprofile>\ProgramData` under default `current` context — a
-  ; non-existent path. Verified by Plan 11.1-05 sandbox UAT (Test B updates_dir_after=true
-  ; while planted file remained at C:\ProgramData\go-mapi\updates). ReadEnvStr is
-  ; reliable across user/SYSTEM contexts.
+  ; Use ReadEnvStr to read %PROGRAMDATA% directly. Deriving it from $APPDATA
+  ; resolves to `<userprofile>\ProgramData`, not C:\ProgramData. ReadEnvStr is
+  ; reliable across user/SYSTEM contexts and is also used by backup/restore.
   ReadEnvStr $0 PROGRAMDATA
   RMDir /r "$0\go-mapi\updates"
 
@@ -896,8 +894,9 @@ Section "Uninstall"
 
   ; 5. %ProgramData%\go-mapi\uninst\ — remove AFTER the restore (step 4) since
   ; the restore reads from this directory
-  RMDir /r "$APPDATA\..\..\ProgramData\go-mapi\uninst"
-  RMDir    "$APPDATA\..\..\ProgramData\go-mapi"   ; only if empty (non-recursive)
+  ReadEnvStr $6 PROGRAMDATA
+  RMDir /r "$6\go-mapi\uninst"
+  RMDir    "$6\go-mapi"   ; only if empty (non-recursive)
 
   ; 6. %TEMP%\go-mapi\ — best-effort. Under elevated uninstall this is the
   ; SYSTEM user's TEMP, not the real user's. Real users' temp already
@@ -938,6 +937,7 @@ Section "Uninstall"
   RMDir "$INSTDIR"
 
   ; Add/Remove Programs entry
+  SetRegView 64
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
   DetailPrint "Uninstall complete"
@@ -950,7 +950,9 @@ SectionEnd
 ;   3. the restoration target's subkey still exists under HKLM\SOFTWARE\Clients\Mail\
 ; Otherwise: try fallbacks (Microsoft Outlook -> Outlook -> Windows Mail) or clear to "".
 Function un.RestorePreviousMailClient
+  ReadEnvStr $6 PROGRAMDATA
   ; Guard 1: only restore if current (Default) is still our claim
+  SetRegView 64
   ReadRegStr $0 HKLM "SOFTWARE\Clients\Mail" ""
   StrCmp $0 "go-mapi" 0 DoneRestore
   DetailPrint "Mail (Default) is still 'go-mapi' — proceeding with restore"
@@ -971,8 +973,8 @@ Function un.RestorePreviousMailClient
   ;   - previousClient=null:        exit 0, stdout = "" (just trailing CRLF)
   ;   - previousClient="<name>":    exit 0, stdout = "<name>" + trailing CRLF
   StrCpy $1 ""  ; candidate name
-  IfFileExists "$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json" 0 NoBackup
-  nsExec::ExecToStack 'powershell.exe -NoProfile -Command "try { $$j = Get-Content -LiteralPath ''$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json'' -Raw | ConvertFrom-Json; if ($$null -ne $$j.previousClient) { Write-Output $$j.previousClient } exit 0 } catch { exit 1 }"'
+  IfFileExists "$6\go-mapi\uninst\previous-mail-client.json" 0 NoBackup
+  nsExec::ExecToStack 'powershell.exe -NoProfile -Command "try { $$j = Get-Content -LiteralPath ''$6\go-mapi\uninst\previous-mail-client.json'' -Raw | ConvertFrom-Json; if ($$null -ne $$j.previousClient) { Write-Output $$j.previousClient } exit 0 } catch { exit 1 }"'
   Pop $4    ; exit code
   Pop $1    ; stdout (empty if null or parse error)
   StrCmp $4 "0" 0 TryFallbacks
@@ -1023,33 +1025,7 @@ ClearDefault:
   WriteRegStr HKLM "SOFTWARE\Clients\Mail" "" ""
   DetailPrint "No fallback Mail client available — cleared (Default)"
 DoneRestore:
-  ; QUICK-260423-ntu T3c — symmetric WOW6432 restore. If the backup JSON
-  ; is present and contains a non-null previousClient32 value, write it
-  ; back to the 32-bit view's (Default). Parse via PowerShell's
-  ; ConvertFrom-Json — same pattern as the native-view restore above.
-  IfFileExists "$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json" 0 NoWow6432
-  nsExec::ExecToStack 'powershell.exe -NoProfile -Command "try { $$j = Get-Content -LiteralPath ''$APPDATA\..\..\ProgramData\go-mapi\uninst\previous-mail-client.json'' -Raw | ConvertFrom-Json; if ($$null -ne $$j.previousClient32) { Write-Output $$j.previousClient32 } exit 0 } catch { exit 1 }"'
-  Pop $4    ; exit code
-  Pop $1    ; stdout
-  StrCmp $4 "0" 0 NoWow6432
-  StrLen $4 $1
-  IntCmp $4 2 0 WowSkipTrim 0
-  StrCpy $1 $1 -2
-WowSkipTrim:
-  StrCmp $1 "" NoWow6432
-  SetRegView 32
-  ReadRegStr $5 HKLM "SOFTWARE\Clients\Mail\$1" ""
-  StrCmp $5 "" WowKeyGone
-  WriteRegStr HKLM "SOFTWARE\Clients\Mail" "" "$1"
-  DetailPrint "Restored WOW6432 Mail (Default) to: $1"
-  Goto WowDone
-WowKeyGone:
-  DetailPrint "WOW6432 previous client subkey missing — skipping restore"
-WowDone:
-  SetRegView default
-  Goto Wow6432End
-NoWow6432:
-Wow6432End:
+  SetRegView 64
 FunctionEnd
 
 ; Helper: case-sensitive substring check. Push haystack, push needle. Pops "1" (found) or "0".

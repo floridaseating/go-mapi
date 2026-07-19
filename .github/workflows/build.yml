@@ -10,11 +10,23 @@ on:
 
 jobs:
   build-interceptor:
-    name: Build Interceptor (C++)
+    name: Build Interceptor (C++) (${{ matrix.label }})
     runs-on: windows-latest
     strategy:
       matrix:
-        config: [Debug, Release]
+        include:
+          - arch: x64
+            config: Debug
+            label: Debug
+            artifact_suffix: Debug
+          - arch: x64
+            config: Release
+            label: Release
+            artifact_suffix: Release
+          - arch: x86
+            config: Release
+            label: x86 Release
+            artifact_suffix: x86-Release
 
     steps:
       - uses: actions/checkout@v4
@@ -51,29 +63,28 @@ jobs:
 
       - name: Build Interceptor and Test Harness
         working-directory: src/interceptor
-        run: .\build.ps1 -Config ${{ matrix.config }} -Tests -Clean
+        run: .\build.ps1 -Arch ${{ matrix.arch }} -Config ${{ matrix.config }} -Tests -Clean
 
       - name: Run Test Harness
         working-directory: src/interceptor
-        run: .\build-x64\bin\go-mapi-test-harness.exe .\build-x64\bin\go-mapi.dll
-        continue-on-error: true
+        run: .\build-${{ matrix.arch }}\bin\go-mapi-test-harness.exe .\build-${{ matrix.arch }}\bin\go-mapi.dll
 
       - name: Run C++ Unit Tests (doctest via ctest)
-        working-directory: src/interceptor/build-x64
+        working-directory: src/interceptor/build-${{ matrix.arch }}
         run: ctest --output-on-failure --build-config ${{ matrix.config }}
 
       - name: Upload DLL Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-mapi-dll-${{ matrix.config }}
-          path: src/interceptor/build-x64/bin/go-mapi.dll
+          name: go-mapi-dll-${{ matrix.artifact_suffix }}
+          path: src/interceptor/build-${{ matrix.arch }}/bin/go-mapi.dll
           if-no-files-found: warn
 
       - name: Upload Test Harness Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: go-mapi-tests-${{ matrix.config }}
-          path: src/interceptor/build-x64/bin/go-mapi-test-harness.exe
+          name: go-mapi-tests-${{ matrix.artifact_suffix }}
+          path: src/interceptor/build-${{ matrix.arch }}/bin/go-mapi-test-harness.exe
           if-no-files-found: warn
 
   build-wails-app:
