@@ -1,12 +1,10 @@
 #include "mapi_impl.h"
-#include "diagnostic_trace.h"
 #include "message_converter.h"
 #include "fs_utils.h"
 #include "json_writer.h"
 #include <windows.h>
 #include <objbase.h>
 #include <psapi.h>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -17,72 +15,6 @@
 #pragma comment(lib, "ole32.lib")
 
 namespace go_mapi {
-
-namespace {
-
-uint64_t AttachmentBytes(const MailMessage& msg) {
-    uint64_t total = 0;
-    for (const auto& attachment : msg.attachments) {
-        total += attachment.size;
-    }
-    return total;
-}
-
-class SendCallTrace {
-public:
-    SendCallTrace(const char* api,
-                  ULONG_PTR uiParent,
-                  FLAGS flags,
-                  uint32_t attachmentCount) noexcept {
-        try {
-            started_ = std::chrono::steady_clock::now();
-            trace_.timestamp = DiagnosticTrace::UtcTimestampNow();
-            trace_.phase = "summary";
-            trace_.processId = GetCurrentProcessId();
-            trace_.threadId = GetCurrentThreadId();
-            trace_.api = api;
-            trace_.processArchitecture = sizeof(void*) == 8 ? "x64" : "x86";
-            trace_.flags = static_cast<uint32_t>(flags);
-            trace_.uiParent = static_cast<uint64_t>(uiParent);
-            trace_.attachmentCount = attachmentCount;
-        } catch (...) {
-            enabled_ = false;
-        }
-    }
-
-    void SetOriginApp(const std::string& originApp) noexcept {
-        if (!enabled_) return;
-        try {
-            trace_.originApp = originApp;
-        } catch (...) {
-            enabled_ = false;
-        }
-    }
-
-    ULONG Finish(ULONG result, uint64_t attachmentBytes = 0) noexcept {
-        if (!enabled_) return result;
-        try {
-            trace_.attachmentBytes = attachmentBytes;
-            trace_.hasResult = true;
-            trace_.result = static_cast<uint32_t>(result);
-            trace_.hasDuration = true;
-            trace_.durationMs = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - started_).count());
-            (void)DiagnosticTrace::Append(trace_);
-        } catch (...) {
-            // Diagnostics are observational only. Preserve the MAPI result.
-        }
-        return result;
-    }
-
-private:
-    std::chrono::steady_clock::time_point started_;
-    MapiCallTrace trace_;
-    bool enabled_ = true;
-};
-
-} // namespace
 
 // QUICK-260423-tk6: copy attachments into a stable sibling dir keyed off the
 // supplied stem. On success, mutates msg.attachments in-place so each entry's
@@ -177,11 +109,8 @@ ULONG MapiImpl::MAPISendMailA(
     FLAGS flFlags,
     ULONG ulReserved
 ) {
-    SendCallTrace trace(
-        "MAPISendMailA", ulUIParam, flFlags,
-        lpMessage ? lpMessage->nFileCount : 0);
     if (!lpMessage) {
-        return trace.Finish(MAPI_E_INVALID_MESSAGE);
+        return MAPI_E_INVALID_MESSAGE;
     }
 
     try {
@@ -189,7 +118,6 @@ ULONG MapiImpl::MAPISendMailA(
         // originApp populated here because it requires live process context
         // (out of scope for the pure message_converter module).
         msg.originApp = GetOriginApplicationName();
-        trace.SetOriginApp(msg.originApp);
 
         // QUICK-260423-tk6: copy attachments into a queue-owned sibling dir
         // BEFORE writing the JSON. The legacy Spanish MAPI caller deletes its
@@ -199,17 +127,17 @@ ULONG MapiImpl::MAPISendMailA(
         if (!CopyAttachmentsForStem(msg, stem)) {
             // Error file already written by CopyAttachmentsForStem; do NOT
             // write the JSON — half-a-message would silently drop attachments.
-            return trace.Finish(MAPI_E_FAILURE, AttachmentBytes(msg));
+            return MAPI_E_FAILURE;
         }
         std::wstring filePath = JsonWriter::WriteMailToFileWithStem(msg, stem);
 
         if (filePath.empty()) {
-            return trace.Finish(MAPI_E_FAILURE, AttachmentBytes(msg));
+            return MAPI_E_FAILURE;
         }
 
-        return trace.Finish(SUCCESS_SUCCESS, AttachmentBytes(msg));
+        return SUCCESS_SUCCESS;
     } catch (...) {
-        return trace.Finish(MAPI_E_FAILURE);
+        return MAPI_E_FAILURE;
     }
 }
 
@@ -220,11 +148,8 @@ ULONG MapiImpl::MAPISendMailW(
     FLAGS flFlags,
     ULONG ulReserved
 ) {
-    SendCallTrace trace(
-        "MAPISendMailW", ulUIParam, flFlags,
-        lpMessage ? lpMessage->nFileCount : 0);
     if (!lpMessage) {
-        return trace.Finish(MAPI_E_INVALID_MESSAGE);
+        return MAPI_E_INVALID_MESSAGE;
     }
 
     try {
@@ -232,24 +157,23 @@ ULONG MapiImpl::MAPISendMailW(
         // originApp populated here because it requires live process context
         // (out of scope for the pure message_converter module).
         msg.originApp = GetOriginApplicationName();
-        trace.SetOriginApp(msg.originApp);
 
         // QUICK-260423-tk6: same lifetime fix as the ANSI path — copy
         // attachments into %LOCALAPPDATA%\go-mapi\queue\<stem>\ before the
         // caller's TEMP dir disappears on return.
         std::wstring stem = FsUtils::GenerateUniqueStem();
         if (!CopyAttachmentsForStem(msg, stem)) {
-            return trace.Finish(MAPI_E_FAILURE, AttachmentBytes(msg));
+            return MAPI_E_FAILURE;
         }
         std::wstring filePath = JsonWriter::WriteMailToFileWithStem(msg, stem);
 
         if (filePath.empty()) {
-            return trace.Finish(MAPI_E_FAILURE, AttachmentBytes(msg));
+            return MAPI_E_FAILURE;
         }
 
-        return trace.Finish(SUCCESS_SUCCESS, AttachmentBytes(msg));
+        return SUCCESS_SUCCESS;
     } catch (...) {
-        return trace.Finish(MAPI_E_FAILURE);
+        return MAPI_E_FAILURE;
     }
 }
 

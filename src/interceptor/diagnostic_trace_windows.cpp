@@ -7,7 +7,7 @@ namespace go_mapi {
 namespace {
 
 constexpr LONGLONG kMaxTraceBytes = 1024 * 1024;
-constexpr DWORD kTraceLockTimeoutMs = 2000;
+constexpr DWORD kTraceLockTimeoutMs = 50;
 constexpr wchar_t kTraceMutexName[] =
     L"Local\\FloridaSeating.GoMapi.DiagnosticTrace";
 

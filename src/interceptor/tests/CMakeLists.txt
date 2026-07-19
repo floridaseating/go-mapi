@@ -115,6 +115,15 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_mapi_surface_contract.cmake
 )
 
+add_test(
+    NAME export_trace_source_contract
+    COMMAND ${CMAKE_COMMAND}
+        -DEXPORTS_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_exports.def
+        -DMAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../main.cpp
+        -DIMPL_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../mapi_impl.cpp
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/verify_export_trace_contract.cmake
+)
+
 add_executable(mapi_export_contract_tests
     mapi_export_contract_tests.cpp
 )
